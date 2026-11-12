@@ -1,6 +1,6 @@
 use windows::core::Interface;
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
-use windows::Win32::Foundation::{HANDLE, RECT};
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct3D::{
     D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1,
 };
@@ -8,19 +8,19 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D,
     ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
     ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView, D3D11_BIND_RENDER_TARGET,
-    D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_RESOURCE_MISC_SHARED, D3D11_SDK_VERSION,
-    D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
-    D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
-    D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
-    D3D11_VPOV_DIMENSION_TEXTURE2D,
+    D3D11_BIND_SHADER_RESOURCE, D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ,
+    D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+    D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
+    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+    D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
 };
-use windows::Win32::Graphics::Dxgi::{IDXGIDevice, IDXGIResource};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{IMFDXGIDeviceManager, MFCreateDXGIDeviceManager};
 use windows::Win32::System::WinRT::Direct3D11::CreateDirect3D11DeviceFromDXGIDevice;
 
@@ -374,44 +374,147 @@ impl GpuBgraToNv12 {
     }
 }
 
-/// Ponte Zero-Copy na VRAM entre o D3D11Device de captura (WGC) e o D3D11Device do Encoder (MF/AMF/NVENC).
-pub struct SharedGpuBridge {
-    cap_device: ID3D11Device,
-    cap_context: ID3D11DeviceContext,
-    enc_device: ID3D11Device,
-    cap_shared_tex: ID3D11Texture2D,
-    enc_shared_tex: ID3D11Texture2D,
+/// Buffer reciclável BGRA entre o D3D11 de captura (WGC) e o D3D11 isolado do encoder (MF/AMF/NVENC).
+/// Evita alocação DXGI compartilhada entre dispositivos, eliminando deadlocks no driver WDDM/AMD.
+pub struct SharedBgraSlot {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SharedBgraSlot {
+    pub fn new(width: u32, height: u32) -> Self {
+        let w = width.max(2);
+        let h = height.max(2);
+        let size = (w as usize) * (h as usize) * 4;
+        Self {
+            data: vec![0u8; size],
+            width: w,
+            height: h,
+        }
+    }
+}
+
+/// Leitor staging no D3D11Device de captura (exclusivo da thread coordenadora).
+pub struct CapStagingReader {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    staging_tex: ID3D11Texture2D,
     width: u32,
     height: u32,
 }
 
-impl SharedGpuBridge {
-    pub fn new(
-        cap_device: ID3D11Device,
-        cap_context: ID3D11DeviceContext,
-        enc_device: ID3D11Device,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, String> {
-        let (cap_shared_tex, enc_shared_tex) =
-            Self::alloc_pair(&cap_device, &enc_device, width.max(2), height.max(2))?;
+impl CapStagingReader {
+    pub fn new(device: ID3D11Device, context: ID3D11DeviceContext, width: u32, height: u32) -> Result<Self, String> {
+        let w = width.max(2);
+        let h = height.max(2);
+        let staging_tex = Self::alloc_staging(&device, w, h)?;
         Ok(Self {
-            cap_device,
-            cap_context,
-            enc_device,
-            cap_shared_tex,
-            enc_shared_tex,
-            width: width.max(2),
-            height: height.max(2),
+            device,
+            context,
+            staging_tex,
+            width: w,
+            height: h,
         })
     }
 
-    fn alloc_pair(
-        cap_device: &ID3D11Device,
-        enc_device: &ID3D11Device,
-        width: u32,
-        height: u32,
-    ) -> Result<(ID3D11Texture2D, ID3D11Texture2D), String> {
+    fn alloc_staging(device: &ID3D11Device, width: u32, height: u32) -> Result<ID3D11Texture2D, String> {
+        unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut tex: Option<ID3D11Texture2D> = None;
+            device
+                .CreateTexture2D(&desc, None, Some(&mut tex))
+                .map_err(|e| format!("Falha CreateTexture2D Staging: {e}"))?;
+            tex.ok_or_else(|| "staging_tex nula".to_string())
+        }
+    }
+
+    pub fn read_frame(&mut self, wgc_bgra: &ID3D11Texture2D, slot: &mut SharedBgraSlot) -> Result<(u32, u32), String> {
+        unsafe {
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            wgc_bgra.GetDesc(&mut desc);
+            let w = desc.Width.max(2);
+            let h = desc.Height.max(2);
+
+            if w != self.width || h != self.height {
+                self.staging_tex = Self::alloc_staging(&self.device, w, h)?;
+                self.width = w;
+                self.height = h;
+            }
+
+            let row_bytes = (w as usize) * 4;
+            let total_bytes = row_bytes * (h as usize);
+            if slot.data.len() != total_bytes {
+                slot.data.resize(total_bytes, 0);
+            }
+            slot.width = w;
+            slot.height = h;
+
+            self.context.CopyResource(&self.staging_tex, wgc_bgra);
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context
+                .Map(&self.staging_tex, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|e| format!("Falha Map staging read: {e}"))?;
+
+            let src_ptr = mapped.pData as *const u8;
+            let pitch = mapped.RowPitch as usize;
+            if !src_ptr.is_null() {
+                if pitch == row_bytes {
+                    std::ptr::copy_nonoverlapping(src_ptr, slot.data.as_mut_ptr(), total_bytes);
+                } else {
+                    for y in 0..(h as usize) {
+                        std::ptr::copy_nonoverlapping(
+                            src_ptr.add(y * pitch),
+                            slot.data.as_mut_ptr().add(y * row_bytes),
+                            row_bytes,
+                        );
+                    }
+                }
+            }
+            self.context.Unmap(&self.staging_tex, 0);
+            Ok((w, h))
+        }
+    }
+}
+
+/// Uploader BGRA no D3D11Device do encoder (exclusivo da thread ravix-muxer).
+pub struct EncBgraUploader {
+    device: ID3D11Device,
+    context: ID3D11DeviceContext,
+    enc_tex: ID3D11Texture2D,
+    width: u32,
+    height: u32,
+}
+
+impl EncBgraUploader {
+    pub fn new(device: ID3D11Device, context: ID3D11DeviceContext, width: u32, height: u32) -> Result<Self, String> {
+        let w = width.max(2);
+        let h = height.max(2);
+        let enc_tex = Self::alloc_enc_tex(&device, w, h)?;
+        Ok(Self {
+            device,
+            context,
+            enc_tex,
+            width: w,
+            height: h,
+        })
+    }
+
+    fn alloc_enc_tex(device: &ID3D11Device, width: u32, height: u32) -> Result<ID3D11Texture2D, String> {
         unsafe {
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width,
@@ -424,51 +527,78 @@ impl SharedGpuBridge {
                     Quality: 0,
                 },
                 Usage: D3D11_USAGE_DEFAULT,
-                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
                 CPUAccessFlags: 0,
-                MiscFlags: D3D11_RESOURCE_MISC_SHARED.0 as u32,
+                MiscFlags: 0,
             };
-            let mut cap_tex: Option<ID3D11Texture2D> = None;
-            cap_device
-                .CreateTexture2D(&desc, None, Some(&mut cap_tex))
-                .map_err(|e| format!("Falha CreateTexture2D Shared: {e}"))?;
-            let cap_tex = cap_tex.ok_or("cap_shared_tex nula")?;
-
-            let dxgi_res: IDXGIResource = cap_tex
-                .cast()
-                .map_err(|e| format!("Falha cast IDXGIResource: {e}"))?;
-            let shared_handle: HANDLE = dxgi_res
-                .GetSharedHandle()
-                .map_err(|e| format!("Falha GetSharedHandle: {e}"))?;
-
-            let mut enc_tex: Option<ID3D11Texture2D> = None;
-            enc_device
-                .OpenSharedResource(shared_handle, &mut enc_tex)
-                .map_err(|e| format!("Falha OpenSharedResource: {e}"))?;
-            let enc_tex = enc_tex.ok_or("enc_shared_tex nula")?;
-
-            Ok((cap_tex, enc_tex))
+            let mut tex: Option<ID3D11Texture2D> = None;
+            device
+                .CreateTexture2D(&desc, None, Some(&mut tex))
+                .map_err(|e| format!("Falha CreateTexture2D enc BGRA: {e}"))?;
+            tex.ok_or_else(|| "enc_tex nula".to_string())
         }
     }
 
-    pub fn transfer(&mut self, wgc_bgra: &ID3D11Texture2D) -> Result<&ID3D11Texture2D, String> {
-        unsafe {
-            let mut desc = D3D11_TEXTURE2D_DESC::default();
-            wgc_bgra.GetDesc(&mut desc);
-            let w = desc.Width.max(2);
-            let h = desc.Height.max(2);
-
-            if w != self.width || h != self.height {
-                let (c, e) = Self::alloc_pair(&self.cap_device, &self.enc_device, w, h)?;
-                self.cap_shared_tex = c;
-                self.enc_shared_tex = e;
-                self.width = w;
-                self.height = h;
-            }
-
-            self.cap_context.CopyResource(&self.cap_shared_tex, wgc_bgra);
-            self.cap_context.Flush();
-            Ok(&self.enc_shared_tex)
+    pub fn upload(&mut self, slot: &SharedBgraSlot) -> Result<&ID3D11Texture2D, String> {
+        let w = slot.width.max(2);
+        let h = slot.height.max(2);
+        let row_bytes = w * 4;
+        let expected = (row_bytes as usize) * (h as usize);
+        if slot.data.len() < expected {
+            return Err("Buffer de frame BGRA menor que dimensões informadas".to_string());
         }
+        if w != self.width || h != self.height {
+            self.enc_tex = Self::alloc_enc_tex(&self.device, w, h)?;
+            self.width = w;
+            self.height = h;
+        }
+        unsafe {
+            self.context.UpdateSubresource(
+                &self.enc_tex,
+                0,
+                None,
+                slot.data.as_ptr() as *const core::ffi::c_void,
+                row_bytes,
+                expected as u32,
+            );
+        }
+        Ok(&self.enc_tex)
+    }
+}
+
+/// Ponte isolada entre o D3D11Device de captura (WGC) e o D3D11Device do Encoder (MF/AMF/NVENC).
+#[allow(dead_code)]
+pub struct SharedGpuBridge {
+    reader: CapStagingReader,
+    uploader: EncBgraUploader,
+    slot: SharedBgraSlot,
+}
+
+#[allow(dead_code)]
+impl SharedGpuBridge {
+    pub fn new(
+        cap_device: ID3D11Device,
+        cap_context: ID3D11DeviceContext,
+        enc_device: ID3D11Device,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
+        let enc_context = unsafe {
+            enc_device
+                .GetImmediateContext()
+                .map_err(|e| format!("Falha GetImmediateContext encoder: {e}"))?
+        };
+        let w = width.max(2);
+        let h = height.max(2);
+        Ok(Self {
+            reader: CapStagingReader::new(cap_device, cap_context, w, h)?,
+            uploader: EncBgraUploader::new(enc_device, enc_context, w, h)?,
+            slot: SharedBgraSlot::new(w, h),
+        })
+    }
+
+    pub fn transfer(&mut self, wgc_bgra: &ID3D11Texture2D) -> Result<&ID3D11Texture2D, String> {
+        self.reader.read_frame(wgc_bgra, &mut self.slot)?;
+        self.uploader.upload(&self.slot)
     }
 }

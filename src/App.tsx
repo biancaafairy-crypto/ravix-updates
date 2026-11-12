@@ -218,7 +218,7 @@ export default function App() {
             <div className="flex items-center gap-2.5">
               <h1 className="text-lg font-bold tracking-wider text-white">RAVIX</h1>
               <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/70">
-                V0.1.0
+                V0.1.1
               </span>
               <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${stateBadge.cls}`}>
                 <span className={`h-2 w-2 rounded-full ${stateBadge.dot}`} />

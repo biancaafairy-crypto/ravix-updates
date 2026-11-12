@@ -2,6 +2,7 @@ mod audio;
 mod capabilities;
 mod config;
 mod d3d11;
+mod logger;
 mod models;
 mod recorder;
 mod sink;
@@ -56,8 +57,12 @@ fn update_tray_visual(app: &AppHandle, state: &str) {
     }
 }
 
-fn start_with_state(state: &AppState, app: &AppHandle) -> Result<(), String> {
-    let mut cfg = state.config.lock().clone();
+fn start_with_arcs(
+    config: &Arc<Mutex<RecordingConfig>>,
+    recorder: &Arc<RecorderManager>,
+    app: &AppHandle,
+) -> Result<(), String> {
+    let mut cfg = config.lock().clone();
     let caps = collect_capabilities(cfg.output_dir.clone());
 
     if cfg.source_id.is_empty() {
@@ -76,15 +81,30 @@ fn start_with_state(state: &AppState, app: &AppHandle) -> Result<(), String> {
         "Microsoft Media Foundation H.264".to_string()
     };
 
-    *state.config.lock() = cfg.clone();
+    *config.lock() = cfg.clone();
     let _ = save_config(&cfg);
-    state.recorder.start(cfg, app.clone(), encoder_name)
+    logger::info(
+        "recorder",
+        &format!(
+            "Iniciando gravação: fonte={}:{}, fps={}, bitrate={}kbps, encoder={}",
+            cfg.source_kind, cfg.source_id, cfg.fps, cfg.bitrate_kbps, encoder_name
+        ),
+    );
+    match recorder.start(cfg, app.clone(), encoder_name) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            logger::error("recorder", &format!("Falha ao iniciar gravação: {e}"));
+            Err(e)
+        }
+    }
 }
 
 #[tauri::command]
-fn get_system_capabilities(state: State<'_, AppState>) -> SystemCapabilities {
+async fn get_system_capabilities(state: State<'_, AppState>) -> Result<SystemCapabilities, String> {
     let out_dir = state.config.lock().output_dir.clone();
-    collect_capabilities(out_dir)
+    tauri::async_runtime::spawn_blocking(move || collect_capabilities(out_dir))
+        .await
+        .map_err(|e| format!("Falha ao consultar capacidades: {e}"))
 }
 
 #[tauri::command]
@@ -112,24 +132,39 @@ fn get_recorder_status(state: State<'_, AppState>) -> RecorderStatus {
 }
 
 #[tauri::command]
-fn start_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    start_with_state(&state, &app)
+async fn start_recording(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let config = state.config.clone();
+    let recorder = state.recorder.clone();
+    tauri::async_runtime::spawn_blocking(move || start_with_arcs(&config, &recorder, &app))
+        .await
+        .map_err(|e| format!("Falha interna ao iniciar gravação: {e}"))?
 }
 
 #[tauri::command]
-fn stop_recording(state: State<'_, AppState>) {
-    state.recorder.stop();
+async fn stop_recording(state: State<'_, AppState>) -> Result<(), String> {
+    let recorder = state.recorder.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        recorder.stop();
+    })
+    .await
+    .map_err(|e| format!("Falha interna ao parar gravação: {e}"))
 }
 
 #[tauri::command]
-fn toggle_recording(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
-    if state.recorder.is_recording() {
-        state.recorder.stop();
-        Ok(false)
-    } else {
-        start_with_state(&state, &app)?;
-        Ok(true)
-    }
+async fn toggle_recording(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let config = state.config.clone();
+    let recorder = state.recorder.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if recorder.is_recording() {
+            recorder.stop();
+            Ok(false)
+        } else {
+            start_with_arcs(&config, &recorder, &app)?;
+            Ok(true)
+        }
+    })
+    .await
+    .map_err(|e| format!("Falha interna ao alternar gravação: {e}"))?
 }
 
 #[tauri::command]
@@ -170,17 +205,26 @@ fn update_hotkey(hotkey: String, app: AppHandle, state: State<'_, AppState>) -> 
     Ok(())
 }
 
+fn spawn_toggle_from_handle(app_h: &AppHandle) {
+    let state = app_h.state::<AppState>();
+    let config = state.config.clone();
+    let recorder = state.recorder.clone();
+    let app = app_h.clone();
+    std::thread::spawn(move || {
+        if recorder.is_recording() {
+            recorder.stop();
+        } else {
+            let _ = start_with_arcs(&config, &recorder, &app);
+        }
+    });
+}
+
 fn register_global_hotkey(app: &AppHandle, shortcut_str: &str) -> Result<(), String> {
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
     gs.on_shortcut(shortcut_str, |app_handle, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            let state = app_handle.state::<AppState>();
-            if state.recorder.is_recording() {
-                state.recorder.stop();
-            } else {
-                let _ = start_with_state(&state, app_handle);
-            }
+            spawn_toggle_from_handle(app_handle);
         }
     })
     .map_err(|e| format!("Atalho inválido ou em uso ('{shortcut_str}'): {e}"))
@@ -188,8 +232,22 @@ fn register_global_hotkey(app: &AppHandle, shortcut_str: &str) -> Result<(), Str
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logger::init_logging();
+
     let mut initial_cfg = load_config();
+    logger::info("startup", "Configuração carregada.");
+
     let caps = collect_capabilities(initial_cfg.output_dir.clone());
+    logger::info(
+        "startup",
+        &format!(
+            "Capacidades detectadas: {} fontes, {} encoders, {} saídas de áudio, {} microfones.",
+            caps.sources.len(),
+            caps.encoders.len(),
+            caps.render_devices.len(),
+            caps.capture_devices.len()
+        ),
+    );
 
     if initial_cfg.source_id.is_empty() {
         if let Some(first) = caps.sources.first() {
@@ -206,15 +264,18 @@ pub fn run() {
             initial_cfg.encoder_id = first_any.id.clone();
         }
     }
-    let _ = save_config(&initial_cfg);
+    if let Err(e) = save_config(&initial_cfg) {
+        logger::warn("startup", &format!("Não foi possível salvar config inicial: {e}"));
+    }
 
     let config_arc = Arc::new(Mutex::new(initial_cfg.clone()));
 
-    tauri::Builder::default()
+    let run_res = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(move |app| {
+            logger::info("startup", "Executando setup da interface Tauri...");
             let app_handle = app.handle().clone();
             let app_for_tray = app_handle.clone();
 
@@ -227,51 +288,58 @@ pub fn run() {
                 recorder: recorder.clone(),
             });
 
-            // Configurar System Tray
-            let open_i = MenuItem::with_id(app, "open", "Abrir RAVIX", true, None::<&str>)?;
-            let toggle_i =
-                MenuItem::with_id(app, "toggle", "Iniciar / Parar Gravação", true, None::<&str>)?;
-            let quit_i = MenuItem::with_id(app, "quit", "Sair do RAVIX", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open_i, &toggle_i, &quit_i])?;
+            // Configurar System Tray (tratando erro de forma não fatal para não impedir abertura da UI)
+            let tray_setup = (|| -> Result<(), Box<dyn std::error::Error>> {
+                let open_i = MenuItem::with_id(app, "open", "Abrir RAVIX", true, None::<&str>)?;
+                let toggle_i =
+                    MenuItem::with_id(app, "toggle", "Iniciar / Parar Gravação", true, None::<&str>)?;
+                let quit_i = MenuItem::with_id(app, "quit", "Sair do RAVIX", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open_i, &toggle_i, &quit_i])?;
 
-            let icon = Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
+                let icon = Image::from_bytes(include_bytes!("../icons/tray-idle.png"))?;
 
-            TrayIconBuilder::with_id(TRAY_ID)
-                .icon(icon)
-                .tooltip("RAVIX — Pronto para gravar")
-                .menu(&menu)
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app_h, event| match event.id.as_ref() {
-                    "open" => show_main_window(app_h),
-                    "toggle" => {
-                        let st = app_h.state::<AppState>();
-                        if st.recorder.is_recording() {
+                TrayIconBuilder::with_id(TRAY_ID)
+                    .icon(icon)
+                    .tooltip("RAVIX — Pronto para gravar")
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app_h, event| match event.id.as_ref() {
+                        "open" => show_main_window(app_h),
+                        "toggle" => spawn_toggle_from_handle(app_h),
+                        "quit" => {
+                            logger::info("lifecycle", "Encerramento solicitado pela bandeja.");
+                            let st = app_h.state::<AppState>();
                             st.recorder.stop();
-                        } else {
-                            let _ = start_with_state(&st, app_h);
+                            app_h.exit(0);
                         }
-                    }
-                    "quit" => {
-                        let st = app_h.state::<AppState>();
-                        st.recorder.stop();
-                        app_h.exit(0);
-                    }
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        show_main_window(tray.app_handle());
-                    }
-                })
-                .build(app)?;
+                        _ => {}
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            show_main_window(tray.app_handle());
+                        }
+                    })
+                    .build(app)?;
+                Ok(())
+            })();
 
-            let _ = register_global_hotkey(&app_handle, &initial_cfg.hotkey);
+            match tray_setup {
+                Ok(()) => logger::info("startup", "Bandeja do Windows criada."),
+                Err(e) => logger::warn("startup", &format!("Falha não fatal ao criar bandeja: {e}")),
+            }
 
+            if let Err(e) = register_global_hotkey(&app_handle, &initial_cfg.hotkey) {
+                logger::warn("startup", &format!("Atalho global '{}' não registrado: {e}", initial_cfg.hotkey));
+            } else {
+                logger::info("startup", &format!("Atalho global '{}' registrado.", initial_cfg.hotkey));
+            }
+
+            logger::info("startup", "Setup Tauri concluído; janela principal pronta.");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -281,6 +349,8 @@ pub fn run() {
                 if keep_in_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                } else {
+                    logger::info("lifecycle", "Janela fechada; encerrando aplicativo.");
                 }
             }
         })
@@ -297,6 +367,10 @@ pub fn run() {
             open_video_file,
             update_hotkey,
         ])
-        .run(tauri::generate_context!())
-        .expect("Erro ao executar aplicativo RAVIX");
+        .run(tauri::generate_context!());
+
+    if let Err(e) = run_res {
+        logger::error("startup", &format!("Erro fatal na runtime Tauri: {e}"));
+        std::process::exit(1);
+    }
 }

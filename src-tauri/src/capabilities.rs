@@ -20,7 +20,8 @@ use windows::Win32::Media::MediaFoundation::{
 };
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
+    COINIT_MULTITHREADED, STGM_READ,
 };
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
@@ -299,8 +300,18 @@ fn get_process_name(pid: u32) -> Option<String> {
 }
 
 fn enumerate_h264_encoders() -> Vec<EncoderOption> {
+    // Executa em thread dedicada para nunca alterar o COM Apartment (STA) da thread principal da UI
+    std::thread::Builder::new()
+        .name("ravix-enum-enc".to_string())
+        .spawn(|| enumerate_h264_encoders_mta())
+        .ok()
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default()
+}
+
+fn enumerate_h264_encoders_mta() -> Vec<EncoderOption> {
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let com_init = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
         let mf_ok = MFStartup(MF_VERSION, 0).is_ok();
         let mut result = Vec::new();
         let mut seen_names = HashSet::new();
@@ -389,6 +400,9 @@ fn enumerate_h264_encoders() -> Vec<EncoderOption> {
         if mf_ok {
             let _ = MFShutdown();
         }
+        if com_init {
+            CoUninitialize();
+        }
         result
     }
 }
@@ -417,17 +431,30 @@ fn detect_vendor(name: &str) -> String {
 }
 
 fn enumerate_audio_devices() -> (Vec<AudioDeviceOption>, Vec<AudioDeviceOption>) {
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-        let Ok(enumerator): Result<IMMDeviceEnumerator, _> =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-        else {
-            return (Vec::new(), Vec::new());
-        };
+    // Executa em thread dedicada para manter a thread principal em STA (OleInitialize / WebView2)
+    std::thread::Builder::new()
+        .name("ravix-enum-audio".to_string())
+        .spawn(|| enumerate_audio_devices_mta())
+        .ok()
+        .and_then(|h| h.join().ok())
+        .unwrap_or_default()
+}
 
-        let render = list_endpoints(&enumerator, eRender, "render");
-        let capture = list_endpoints(&enumerator, eCapture, "capture");
-        (render, capture)
+fn enumerate_audio_devices_mta() -> (Vec<AudioDeviceOption>, Vec<AudioDeviceOption>) {
+    unsafe {
+        let com_init = CoInitializeEx(None, COINIT_MULTITHREADED).is_ok();
+        let res = match CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+            Ok(enumerator) => {
+                let render = list_endpoints(&enumerator, eRender, "render");
+                let capture = list_endpoints(&enumerator, eCapture, "capture");
+                (render, capture)
+            }
+            Err(_) => (Vec::new(), Vec::new()),
+        };
+        if com_init {
+            CoUninitialize();
+        }
+        res
     }
 }
 

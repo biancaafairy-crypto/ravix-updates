@@ -1,7 +1,7 @@
 use crate::audio::{current_qpc, qpc_elapsed_100ns, AudioCaptureHandle, AudioChunk};
 use crate::capabilities::get_free_disk_bytes;
 use crate::config::build_unique_recording_path;
-use crate::d3d11::{D3D11Context, GpuBgraToNv12, SharedGpuBridge};
+use crate::d3d11::{CapStagingReader, D3D11Context, EncBgraUploader, GpuBgraToNv12, SharedBgraSlot};
 use crate::models::{RecorderStatus, RecordingConfig};
 use crate::sink::MediaSinkWriter;
 use crate::wgc::{compute_output_dimensions, WgcSession};
@@ -14,7 +14,6 @@ use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
-use windows::Win32::Graphics::Direct3D11::{ID3D11Texture2D, ID3D11VideoProcessorOutputView};
 use windows::Win32::Media::MediaFoundation::{MFShutdown, MFStartup, MF_VERSION};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::{
@@ -22,21 +21,11 @@ use windows::Win32::System::Threading::{
     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE,
 };
 
-struct GpuSlot {
-    tex: ID3D11Texture2D,
-    view: ID3D11VideoProcessorOutputView,
-}
-
-unsafe impl Send for GpuSlot {}
-unsafe impl Sync for GpuSlot {}
-
-#[derive(Clone)]
-struct SendDxgiManager(windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager);
-unsafe impl Send for SendDxgiManager {}
-unsafe impl Sync for SendDxgiManager {}
+struct SendD3D11Context(D3D11Context);
+unsafe impl Send for SendD3D11Context {}
 
 struct VideoFrameMsg {
-    slot: GpuSlot,
+    slot: SharedBgraSlot,
     timestamp_100ns: i64,
     duration_100ns: i64,
 }
@@ -129,6 +118,7 @@ impl RecorderManager {
                 );
 
                 if let Err(err_msg) = res {
+                    crate::logger::error("recorder", &format!("Pipeline encerrado com erro: {err_msg}"));
                     let mut st = status_arc.write();
                     st.state = "error".to_string();
                     st.last_error = Some(err_msg);
@@ -136,6 +126,14 @@ impl RecorderManager {
                     (on_state)("error");
                     let _ = app.emit("recorder-status", status_arc.read().clone());
                 } else {
+                    let st_snap = status_arc.read().clone();
+                    crate::logger::info(
+                        "recorder",
+                        &format!(
+                            "Gravação finalizada com segurança: frames_written={}, dropped={}, actual_fps={:.1}",
+                            st_snap.frames_written, st_snap.frames_dropped, st_snap.actual_fps
+                        ),
+                    );
                     let mut st = status_arc.write();
                     st.state = "idle".to_string();
                     drop(st);
@@ -240,7 +238,7 @@ fn run_recording_pipeline(
         }
     };
 
-    let wgc = match WgcSession::start(
+    let mut wgc = match WgcSession::start(
         cap_d3d.device.clone(),
         cap_d3d.context.clone(),
         &cap_d3d.winrt_device,
@@ -260,51 +258,25 @@ fn run_recording_pipeline(
         &config.resolution_mode,
     );
 
-    let mut gpu_bridge = match SharedGpuBridge::new(
+    // Pool limitado de 4 buffers BGRA recicláveis (isolamento total entre cap_d3d e enc_d3d)
+    let (free_tx, free_rx): (Sender<SharedBgraSlot>, Receiver<SharedBgraSlot>) = bounded(4);
+    for _ in 0..4 {
+        let _ = free_tx.send(SharedBgraSlot::new(wgc.initial_width, wgc.initial_height));
+    }
+
+    let mut cap_reader = match CapStagingReader::new(
         cap_d3d.device.clone(),
         cap_d3d.context.clone(),
-        enc_d3d.device.clone(),
         wgc.initial_width,
         wgc.initial_height,
     ) {
-        Ok(b) => b,
+        Ok(r) => r,
         Err(e) => {
             wgc.stop();
             let _ = startup_tx.send(Err(e.clone()));
             return Err(e);
         }
     };
-
-    let mut converter = match GpuBgraToNv12::new(
-        enc_d3d.device.clone(),
-        enc_d3d.context.clone(),
-        wgc.initial_width,
-        wgc.initial_height,
-        out_w,
-        out_h,
-    ) {
-        Ok(c) => c,
-        Err(e) => {
-            wgc.stop();
-            let _ = startup_tx.send(Err(e.clone()));
-            return Err(e);
-        }
-    };
-
-    // Pool limitado de 4 texturas NV12 reutilizáveis na VRAM
-    let (free_tx, free_rx): (Sender<GpuSlot>, Receiver<GpuSlot>) = bounded(4);
-    for _ in 0..4 {
-        match converter.create_nv12_texture() {
-            Ok((tex, view)) => {
-                let _ = free_tx.send(GpuSlot { tex, view });
-            }
-            Err(e) => {
-                wgc.stop();
-                let _ = startup_tx.send(Err(e.clone()));
-                return Err(e);
-            }
-        }
-    }
 
     let first_path = match build_unique_recording_path(&config.output_dir, 1) {
         Ok(p) => p,
@@ -317,74 +289,11 @@ fn run_recording_pipeline(
 
     let has_audio = config.system_audio_enabled || config.mic_enabled;
     let prefer_hardware = !config.encoder_id.starts_with("sw:");
-
-    let sink = match MediaSinkWriter::create(
-        &first_path,
-        &enc_d3d.mf_dxgi_manager,
-        out_w,
-        out_h,
-        config.fps,
-        config.bitrate_kbps,
-        has_audio,
-        prefer_hardware,
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            // Se falhou com hardware, tentar fallback software antes de desistir
-            if prefer_hardware {
-                match MediaSinkWriter::create(
-                    &first_path,
-                    &enc_d3d.mf_dxgi_manager,
-                    out_w,
-                    out_h,
-                    config.fps,
-                    config.bitrate_kbps,
-                    has_audio,
-                    false,
-                ) {
-                    Ok(sw_s) => sw_s,
-                    Err(e2) => {
-                        wgc.stop();
-                        let full_err = format!("Falha ao inicializar encoder (HW: {e} | SW: {e2})");
-                        let _ = startup_tx.send(Err(full_err.clone()));
-                        return Err(full_err);
-                    }
-                }
-            } else {
-                wgc.stop();
-                let _ = startup_tx.send(Err(e.clone()));
-                return Err(e);
-            }
-        }
-    };
-
     let (t0_qpc, qpc_freq) = current_qpc();
 
     // Filas assíncronas limitadas
     let (video_tx, video_rx): (Sender<VideoFrameMsg>, Receiver<VideoFrameMsg>) = bounded(4);
     let (audio_tx, audio_rx): (Sender<AudioChunk>, Receiver<AudioChunk>) = bounded(64);
-
-    let audio_handle = if has_audio {
-        match AudioCaptureHandle::start(
-            config.system_audio_enabled,
-            config.system_audio_device_id.clone(),
-            config.mic_enabled,
-            config.mic_device_id.clone(),
-            t0_qpc,
-            qpc_freq,
-            audio_tx,
-        ) {
-            Ok(h) => Some(h),
-            Err(e) => {
-                let _ = sink.finalize();
-                wgc.stop();
-                let _ = startup_tx.send(Err(e.clone()));
-                return Err(e);
-            }
-        }
-    } else {
-        None
-    };
 
     let frames_captured = Arc::new(AtomicU64::new(0));
     let frames_written = Arc::new(AtomicU64::new(0));
@@ -393,18 +302,7 @@ fn run_recording_pipeline(
     let fatal_error: Arc<parking_lot::Mutex<Option<String>>> =
         Arc::new(parking_lot::Mutex::new(None));
 
-    {
-        let mut st = status_arc.write();
-        st.state = "recording".to_string();
-        st.current_file = Some(first_path.to_string_lossy().to_string());
-        st.current_segment = 1;
-        st.last_error = None;
-    }
-    (on_state)("recording");
-    let _ = app.emit("recorder-status", status_arc.read().clone());
-    let _ = startup_tx.send(Ok(()));
-
-    // Thread Muxer (escreve amostras de vídeo NV12 e áudio PCM no SinkWriter)
+    // Toda operação no enc_d3d (EncBgraUploader + GpuBgraToNv12 + MediaSinkWriter) roda exclusivamente na thread ravix-muxer
     let stop_mux = stop_flag.clone();
     let fw_mux = frames_written.clone();
     let fd_mux = frames_dropped.clone();
@@ -412,17 +310,103 @@ fn run_recording_pipeline(
     let fatal_mux = fatal_error.clone();
     let status_mux = status_arc.clone();
     let cfg_mux = config.clone();
-    let mf_mgr_mux = SendDxgiManager(enc_d3d.mf_dxgi_manager.clone());
     let free_tx_mux = free_tx.clone();
+    let init_w = wgc.initial_width;
+    let init_h = wgc.initial_height;
+    let enc_d3d_send = SendD3D11Context(enc_d3d);
+    let first_path_mux = first_path.clone();
+    let (mux_init_tx, mux_init_rx) = bounded::<Result<(), String>>(1);
 
     let muxer_handle = thread::Builder::new()
         .name("ravix-muxer".to_string())
         .spawn(move || {
-            let mgr_wrap = mf_mgr_mux;
-            let mf_mgr_mux = mgr_wrap.0;
+            let enc_d3d_send = enc_d3d_send;
+            let enc_d3d = enc_d3d_send.0;
             unsafe {
                 let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             }
+
+            let mut uploader = match EncBgraUploader::new(
+                enc_d3d.device.clone(),
+                enc_d3d.context.clone(),
+                init_w,
+                init_h,
+            ) {
+                Ok(u) => u,
+                Err(e) => {
+                    let _ = mux_init_tx.send(Err(e));
+                    unsafe { CoUninitialize(); }
+                    return;
+                }
+            };
+
+            let mut converter = match GpuBgraToNv12::new(
+                enc_d3d.device.clone(),
+                enc_d3d.context.clone(),
+                init_w,
+                init_h,
+                out_w,
+                out_h,
+            ) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = mux_init_tx.send(Err(e));
+                    unsafe { CoUninitialize(); }
+                    return;
+                }
+            };
+
+            let (nv12_tex, nv12_view) = match converter.create_nv12_texture() {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let _ = mux_init_tx.send(Err(e));
+                    unsafe { CoUninitialize(); }
+                    return;
+                }
+            };
+
+            let sink = match MediaSinkWriter::create(
+                &first_path_mux,
+                &enc_d3d.mf_dxgi_manager,
+                out_w,
+                out_h,
+                cfg_mux.fps,
+                cfg_mux.bitrate_kbps,
+                has_audio,
+                prefer_hardware,
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    if prefer_hardware {
+                        match MediaSinkWriter::create(
+                            &first_path_mux,
+                            &enc_d3d.mf_dxgi_manager,
+                            out_w,
+                            out_h,
+                            cfg_mux.fps,
+                            cfg_mux.bitrate_kbps,
+                            has_audio,
+                            false,
+                        ) {
+                            Ok(sw_s) => sw_s,
+                            Err(e2) => {
+                                let _ = mux_init_tx.send(Err(format!(
+                                    "Falha ao inicializar encoder (HW: {e} | SW: {e2})"
+                                )));
+                                unsafe { CoUninitialize(); }
+                                return;
+                            }
+                        }
+                    } else {
+                        let _ = mux_init_tx.send(Err(e));
+                        unsafe { CoUninitialize(); }
+                        return;
+                    }
+                }
+            };
+
+            let _ = mux_init_tx.send(Ok(()));
+
             let mut active_sink = Some(sink);
             let mut segment_idx: u32 = 1;
             let mut segment_start_100ns: i64 = 0;
@@ -447,7 +431,7 @@ fn run_recording_pipeline(
                                             Ok(next_path) => {
                                                 match MediaSinkWriter::create(
                                                     &next_path,
-                                                    &mf_mgr_mux,
+                                                    &enc_d3d.mf_dxgi_manager,
                                                     out_w,
                                                     out_h,
                                                     cfg_mux.fps,
@@ -476,9 +460,15 @@ fn run_recording_pipeline(
                                     }
                                 }
 
+                                let mut conv_res = uploader
+                                    .upload(&v.slot)
+                                    .and_then(|enc_tex| converter.convert_bgra_to_nv12(enc_tex, &nv12_view));
                                 if let Some(ref s) = active_sink {
                                     let rel_ts = (v.timestamp_100ns - segment_start_100ns).max(0);
-                                    match s.write_video_texture(&v.slot.tex, rel_ts, v.duration_100ns) {
+                                    conv_res = conv_res.and_then(|()| {
+                                        s.write_video_texture(&nv12_tex, rel_ts, v.duration_100ns)
+                                    });
+                                    match conv_res {
                                         Ok(()) => {
                                             fw_mux.fetch_add(1, Ordering::Relaxed);
                                         }
@@ -529,6 +519,62 @@ fn run_recording_pipeline(
             }
         })
         .map_err(|e| format!("Falha ao iniciar thread muxer: {e}"))?;
+
+    match mux_init_rx.recv() {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            wgc.stop();
+            drop(video_tx);
+            drop(audio_tx);
+            let _ = muxer_handle.join();
+            let _ = startup_tx.send(Err(e.clone()));
+            return Err(e);
+        }
+        Err(_) => {
+            wgc.stop();
+            drop(video_tx);
+            drop(audio_tx);
+            let _ = muxer_handle.join();
+            let err = "Thread do muxer encerrou durante a inicialização.".to_string();
+            let _ = startup_tx.send(Err(err.clone()));
+            return Err(err);
+        }
+    }
+
+    let audio_handle = if has_audio {
+        match AudioCaptureHandle::start(
+            config.system_audio_enabled,
+            config.system_audio_device_id.clone(),
+            config.mic_enabled,
+            config.mic_device_id.clone(),
+            t0_qpc,
+            qpc_freq,
+            audio_tx,
+        ) {
+            Ok(h) => Some(h),
+            Err(e) => {
+                wgc.stop();
+                drop(video_tx);
+                let _ = muxer_handle.join();
+                let _ = startup_tx.send(Err(e.clone()));
+                return Err(e);
+            }
+        }
+    } else {
+        drop(audio_tx);
+        None
+    };
+
+    {
+        let mut st = status_arc.write();
+        st.state = "recording".to_string();
+        st.current_file = Some(first_path.to_string_lossy().to_string());
+        st.current_segment = 1;
+        st.last_error = None;
+    }
+    (on_state)("recording");
+    let _ = app.emit("recorder-status", status_arc.read().clone());
+    let _ = startup_tx.send(Ok(()));
 
     // Thread de telemetria e watchdog de disco / duração
     let stop_mon = stop_flag.clone();
@@ -655,16 +701,14 @@ fn run_recording_pipeline(
             continue;
         }
 
-        // Capturar slot livre da GPU; se o encoder estiver lento e fila cheia, drop controlado
-        let tex_opt = { wgc.slot.texture.lock().clone() };
-        if let Some((bgra_tex, _, _)) = tex_opt {
+        // Capturar slot livre; WGC copia na thread coordenadora (sem contenção com FrameArrived)
+        let tex_opt = wgc.acquire_latest_texture();
+        if let Some((bgra_tex, _, _, _)) = tex_opt {
             frames_captured.fetch_add(1, Ordering::Relaxed);
             match free_rx.try_recv() {
-                Ok(slot) => {
-                    let transferred = gpu_bridge
-                        .transfer(&bgra_tex)
-                        .and_then(|enc_bgra| converter.convert_bgra_to_nv12(enc_bgra, &slot.view));
-                    if transferred.is_ok() {
+                Ok(mut slot) => {
+                    let copied = cap_reader.read_frame(&bgra_tex, &mut slot);
+                    if copied.is_ok() {
                         if video_tx
                             .try_send(VideoFrameMsg {
                                 slot,
@@ -747,6 +791,7 @@ fn wait_high_res_timer(timer: HANDLE, duration_100ns: i64) {
 mod tests {
     use super::*;
     use crate::capabilities::collect_capabilities;
+    use crate::d3d11::SharedGpuBridge;
     use crate::wgc::compute_output_dimensions;
 
     #[test]
@@ -792,7 +837,7 @@ mod tests {
 
         let d3d = D3D11Context::new().expect("D3D11Context failed");
         let enc_d3d = D3D11Context::new().expect("Encoder D3D11Context failed");
-        let wgc = WgcSession::start(
+        let mut wgc = WgcSession::start(
             d3d.device.clone(),
             d3d.context.clone(),
             &d3d.winrt_device,
@@ -856,7 +901,7 @@ mod tests {
             while qpc_elapsed_100ns(t0_qpc, qpc_freq) < target_ts {
                 thread::sleep(Duration::from_millis(2));
             }
-            if let Some((bgra, _, _)) = wgc.slot.texture.lock().clone() {
+            if let Some((bgra, _, _, _)) = wgc.acquire_latest_texture() {
                 let enc_bgra = bridge.transfer(&bgra).expect("bridge.transfer failed");
                 conv.convert_bgra_to_nv12(enc_bgra, &view)
                     .expect("convert_bgra_to_nv12 failed");
@@ -880,6 +925,7 @@ mod tests {
         let meta = std::fs::metadata(&out_file).expect("Arquivo final não existe");
         assert!(meta.len() > 50_000);
         assert!(written_video >= 80);
+        let _ = std::fs::remove_dir_all(&tmp_dir);
 
         unsafe {
             let _ = MFShutdown();
