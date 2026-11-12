@@ -2,6 +2,8 @@ mod audio;
 mod capabilities;
 mod config;
 mod d3d11;
+mod editor;
+mod geometry;
 mod logger;
 mod models;
 mod recorder;
@@ -205,6 +207,25 @@ fn update_hotkey(hotkey: String, app: AppHandle, state: State<'_, AppState>) -> 
     Ok(())
 }
 
+#[tauri::command]
+async fn get_video_metadata(path: String) -> Result<crate::models::VideoMetadata, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::editor::get_video_metadata(&path))
+        .await
+        .map_err(|e| format!("Falha interna ao obter metadados: {e}"))?
+}
+
+#[tauri::command]
+async fn start_video_export(config: crate::models::ExportConfig, app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::editor::run_export(config, app))
+        .await
+        .map_err(|e| format!("Falha interna na exportação: {e}"))?
+}
+
+#[tauri::command]
+fn cancel_video_export() {
+    crate::editor::cancel_current_export();
+}
+
 fn spawn_toggle_from_handle(app_h: &AppHandle) {
     let state = app_h.state::<AppState>();
     let config = state.config.clone();
@@ -366,6 +387,9 @@ pub fn run() {
             open_recordings_folder,
             open_video_file,
             update_hotkey,
+            get_video_metadata,
+            start_video_export,
+            cancel_video_export,
         ])
         .run(tauri::generate_context!());
 

@@ -2,9 +2,10 @@ use crate::audio::{current_qpc, qpc_elapsed_100ns, AudioCaptureHandle, AudioChun
 use crate::capabilities::get_free_disk_bytes;
 use crate::config::build_unique_recording_path;
 use crate::d3d11::{CapStagingReader, D3D11Context, EncBgraUploader, GpuBgraToNv12, SharedBgraSlot};
+use crate::geometry::compute_target_dimensions;
 use crate::models::{RecorderStatus, RecordingConfig};
 use crate::sink::MediaSinkWriter;
-use crate::wgc::{compute_output_dimensions, WgcSession};
+use crate::wgc::WgcSession;
 use crossbeam_channel::{bounded, select, Receiver, Sender};
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -90,6 +91,7 @@ impl RecorderManager {
                 target_fps: config.fps,
                 duration_limit_secs: config.duration_limit_secs,
                 active_encoder_name: Some(encoder_name.clone()),
+                framing_mode: config.framing_mode.clone(),
                 ..Default::default()
             };
         }
@@ -252,10 +254,12 @@ fn run_recording_pipeline(
         }
     };
 
-    let (out_w, out_h) = compute_output_dimensions(
+    let (out_w, out_h) = compute_target_dimensions(
         wgc.initial_width,
         wgc.initial_height,
         &config.resolution_mode,
+        config.custom_width,
+        config.custom_height,
     );
 
     // Pool limitado de 4 buffers BGRA recicláveis (isolamento total entre cap_d3d e enc_d3d)
@@ -347,6 +351,7 @@ fn run_recording_pipeline(
                 init_h,
                 out_w,
                 out_h,
+                &cfg_mux.framing_mode,
             ) {
                 Ok(c) => c,
                 Err(e) => {
@@ -571,6 +576,11 @@ fn run_recording_pipeline(
         st.current_file = Some(first_path.to_string_lossy().to_string());
         st.current_segment = 1;
         st.last_error = None;
+        st.source_width = wgc.initial_width;
+        st.source_height = wgc.initial_height;
+        st.output_width = out_w;
+        st.output_height = out_h;
+        st.framing_mode = config.framing_mode.clone();
     }
     (on_state)("recording");
     let _ = app.emit("recorder-status", status_arc.read().clone());
@@ -863,6 +873,7 @@ mod tests {
             wgc.initial_height,
             out_w,
             out_h,
+            "stretch",
         )
         .expect("GpuBgraToNv12 failed");
 

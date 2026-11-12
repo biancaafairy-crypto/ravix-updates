@@ -43,13 +43,23 @@ pub struct SystemCapabilities {
     pub default_output_dir: String,
 }
 
+fn default_framing_mode() -> String {
+    "stretch".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingConfig {
     pub source_kind: String, // "window" | "monitor"
     pub source_id: String,
     pub output_dir: String,
-    pub resolution_mode: String, // "native" | "1080p" | "900p" | "720p"
+    pub resolution_mode: String, // "native" | "1080p" | "1440p" | "custom"
+    #[serde(default)]
+    pub custom_width: Option<u32>,
+    #[serde(default)]
+    pub custom_height: Option<u32>,
+    #[serde(default = "default_framing_mode")]
+    pub framing_mode: String, // "stretch" | "fit" | "fill_crop"
     pub fps: u32,
     pub bitrate_kbps: u32,
     pub encoder_id: String,
@@ -76,7 +86,10 @@ impl Default for RecordingConfig {
             source_kind: "monitor".to_string(),
             source_id: String::new(),
             output_dir: default_dir,
-            resolution_mode: "native".to_string(),
+            resolution_mode: "1080p".to_string(),
+            custom_width: None,
+            custom_height: None,
+            framing_mode: "stretch".to_string(),
             fps: 60,
             bitrate_kbps: 25000,
             encoder_id: String::new(),
@@ -113,6 +126,11 @@ pub struct RecorderStatus {
     pub free_disk_gb: f64,
     pub active_encoder_name: Option<String>,
     pub last_error: Option<String>,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub output_width: u32,
+    pub output_height: u32,
+    pub framing_mode: String,
 }
 
 impl Default for RecorderStatus {
@@ -135,6 +153,11 @@ impl Default for RecorderStatus {
             free_disk_gb: 0.0,
             active_encoder_name: None,
             last_error: None,
+            source_width: 0,
+            source_height: 0,
+            output_width: 0,
+            output_height: 0,
+            framing_mode: "stretch".to_string(),
         }
     }
 }
@@ -146,4 +169,45 @@ pub struct RecordedFileInfo {
     pub filename: String,
     pub size_bytes: u64,
     pub modified_ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoMetadata {
+    pub path: String,
+    pub filename: String,
+    pub width: u32,
+    pub height: u32,
+    pub duration_secs: f64,
+    pub fps: f64,
+    pub bitrate_kbps: u32,
+    pub video_codec: String,
+    pub audio_codec: String,
+    pub audio_channels: u32,
+    pub audio_sample_rate: u32,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportConfig {
+    pub input_path: String,
+    pub output_path: String,
+    pub resolution_mode: String, // "original" | "1080p" | "1440p" | "custom"
+    pub custom_width: Option<u32>,
+    pub custom_height: Option<u32>,
+    pub framing_mode: String, // "stretch" | "fit" | "fill_crop"
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportProgress {
+    pub state: String, // "idle" | "exporting" | "done" | "error" | "cancelled"
+    pub progress_pct: f32,
+    pub elapsed_secs: f64,
+    pub current_fps: f64,
+    pub output_path: Option<String>,
+    pub error: Option<String>,
 }

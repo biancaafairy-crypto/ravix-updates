@@ -37,7 +37,10 @@ export interface RecordingConfig {
   sourceKind: string;
   sourceId: string;
   outputDir: string;
-  resolutionMode: string;
+  resolutionMode: string; // "native" | "1080p" | "1440p" | "custom"
+  customWidth?: number | null;
+  customHeight?: number | null;
+  framingMode: string; // "stretch" | "fit" | "fill_crop"
   fps: number;
   bitrateKbps: number;
   encoderId: string;
@@ -70,6 +73,11 @@ export interface RecorderStatus {
   freeDiskGb: number;
   activeEncoderName: string | null;
   lastError: string | null;
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  framingMode: string;
 }
 
 export interface RecordedFileInfo {
@@ -77,4 +85,39 @@ export interface RecordedFileInfo {
   filename: string;
   sizeBytes: number;
   modifiedTs: number;
+}
+
+export interface VideoMetadata {
+  path: string;
+  filename: string;
+  width: number;
+  height: number;
+  durationSecs: number;
+  fps: number;
+  bitrateKbps: number;
+  videoCodec: string;
+  audioCodec: string;
+  audioChannels: number;
+  audioSampleRate: number;
+  sizeBytes: number;
+}
+
+export interface ExportConfig {
+  inputPath: string;
+  outputPath: string;
+  resolutionMode: string; // "original" | "1080p" | "1440p" | "custom"
+  customWidth?: number | null;
+  customHeight?: number | null;
+  framingMode: string; // "stretch" | "fit" | "fill_crop"
+  fps: number;
+  bitrateKbps: number;
+}
+
+export interface ExportProgress {
+  state: "idle" | "exporting" | "done" | "error" | "cancelled";
+  progressPct: number;
+  elapsedSecs: number;
+  currentFps: number;
+  outputPath?: string | null;
+  error?: string | null;
 }

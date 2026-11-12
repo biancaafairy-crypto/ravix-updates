@@ -248,11 +248,13 @@ impl WgcSession {
     }
 }
 
+#[allow(dead_code)]
 pub fn ensure_even(v: u32) -> u32 {
     let clamped = v.max(2);
     clamped & !1
 }
 
+#[allow(dead_code)]
 pub fn compute_output_dimensions(src_w: u32, src_h: u32, resolution_mode: &str) -> (u32, u32) {
     let sw = src_w.max(2);
     let sh = src_h.max(2);

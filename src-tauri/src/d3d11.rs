@@ -117,6 +117,7 @@ pub struct GpuBgraToNv12 {
     src_h: u32,
     dst_w: u32,
     dst_h: u32,
+    framing_mode: String,
 }
 
 impl GpuBgraToNv12 {
@@ -127,6 +128,7 @@ impl GpuBgraToNv12 {
         src_h: u32,
         dst_w: u32,
         dst_h: u32,
+        framing_mode: &str,
     ) -> Result<Self, String> {
         unsafe {
             let video_device: ID3D11VideoDevice = device
@@ -145,6 +147,7 @@ impl GpuBgraToNv12 {
                 src_h.max(2),
                 dst_w.max(2),
                 dst_h.max(2),
+                framing_mode.to_string(),
             )?;
             obj.configure_rects();
             Ok(obj)
@@ -160,6 +163,7 @@ impl GpuBgraToNv12 {
         src_h: u32,
         dst_w: u32,
         dst_h: u32,
+        framing_mode: String,
     ) -> Result<Self, String> {
         let content_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
@@ -231,17 +235,19 @@ impl GpuBgraToNv12 {
             src_h,
             dst_w,
             dst_h,
+            framing_mode,
         })
     }
 
     unsafe fn configure_rects(&mut self) {
-        let src_rect = RECT {
-            left: 0,
-            top: 0,
-            right: self.src_w as i32,
-            bottom: self.src_h as i32,
-        };
-        let dst_rect = RECT {
+        let (src_rect, dst_rect) = crate::geometry::compute_transform_rects(
+            self.src_w,
+            self.src_h,
+            self.dst_w,
+            self.dst_h,
+            &self.framing_mode,
+        );
+        let target_rect = RECT {
             left: 0,
             top: 0,
             right: self.dst_w as i32,
@@ -252,7 +258,7 @@ impl GpuBgraToNv12 {
         self.video_context
             .VideoProcessorSetStreamDestRect(&self.processor, 0, true, Some(&dst_rect));
         self.video_context
-            .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&dst_rect));
+            .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&target_rect));
     }
 
     pub fn create_nv12_texture(&self) -> Result<(ID3D11Texture2D, ID3D11VideoProcessorOutputView), String> {
@@ -317,6 +323,7 @@ impl GpuBgraToNv12 {
                         new_h,
                         self.dst_w,
                         self.dst_h,
+                        self.framing_mode.clone(),
                     )?;
                     self.staging_bgra = rebuilt.staging_bgra;
                     self.input_view = rebuilt.input_view;
