@@ -53,6 +53,12 @@ export interface RecordingConfig {
   hotkey: string;
   minFreeDiskMb: number;
   minimizeToTrayOnClose: boolean;
+  autoStartWithWindows?: boolean;
+  autoCheckUpdates?: boolean;
+  updateChannel?: "beta" | "stable";
+  replayHotkey?: string;
+  replayDurationSecs?: number;
+  replayFolder?: string | null;
 }
 
 export interface RecorderStatus {

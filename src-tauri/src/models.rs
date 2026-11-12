@@ -47,6 +47,22 @@ fn default_framing_mode() -> String {
     "stretch".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_beta_channel() -> String {
+    "beta".to_string()
+}
+
+fn default_replay_hotkey() -> String {
+    "F8".to_string()
+}
+
+fn default_replay_duration() -> u32 {
+    30
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingConfig {
@@ -72,6 +88,18 @@ pub struct RecordingConfig {
     pub hotkey: String,
     pub min_free_disk_mb: u64,
     pub minimize_to_tray_on_close: bool,
+    #[serde(default)]
+    pub auto_start_with_windows: bool,
+    #[serde(default = "default_true")]
+    pub auto_check_updates: bool,
+    #[serde(default = "default_beta_channel")]
+    pub update_channel: String,
+    #[serde(default = "default_replay_hotkey")]
+    pub replay_hotkey: String,
+    #[serde(default = "default_replay_duration")]
+    pub replay_duration_secs: u32,
+    #[serde(default)]
+    pub replay_folder: Option<String>,
 }
 
 impl Default for RecordingConfig {
@@ -102,6 +130,12 @@ impl Default for RecordingConfig {
             hotkey: "F9".to_string(),
             min_free_disk_mb: 2048,
             minimize_to_tray_on_close: true,
+            auto_start_with_windows: false,
+            auto_check_updates: true,
+            update_channel: "beta".to_string(),
+            replay_hotkey: "F8".to_string(),
+            replay_duration_secs: 30,
+            replay_folder: None,
         }
     }
 }

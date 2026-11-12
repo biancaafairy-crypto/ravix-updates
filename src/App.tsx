@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   AlertTriangle,
@@ -14,6 +15,7 @@ import {
   FolderOpen,
   Gamepad2,
   HardDrive,
+  Info,
   Keyboard,
   Mic,
   MicOff,
@@ -21,13 +23,15 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Settings,
   ShieldCheck,
   Sliders,
+  Sparkles,
   Square,
   Upload,
   Volume2,
   VolumeX,
-  Wrench,
+  X,
 } from "lucide-react";
 import type {
   ExportConfig,
@@ -117,6 +121,19 @@ export default function App() {
   const isRecording = status?.state === "recording" || status?.state === "starting";
   const isBusy = status?.state === "starting" || status?.state === "stopping";
 
+  // Estado das Configurações e Atualizador
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"geral" | "atalhos" | "gravacoes" | "captura" | "atualizacoes" | "sobre">("geral");
+  const [replayHotkeyInput, setReplayHotkeyInput] = useState("F8");
+  const [updateStatus, setUpdateStatus] = useState<
+    "idle" | "checking" | "available" | "up-to-date" | "downloading" | "downloaded" | "error"
+  >("idle");
+  const [updateObj, setUpdateObj] = useState<Update | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<{ downloaded: number; total: number; percent: number } | null>(null);
+
+  const hasHotkeyConflict = hotkeyInput.trim().toUpperCase() === replayHotkeyInput.trim().toUpperCase();
+
   async function refreshAll() {
     setRefreshing(true);
     try {
@@ -128,7 +145,8 @@ export default function App() {
       ]);
       setCaps(c);
       setConfig(cfg);
-      setHotkeyInput(cfg.hotkey);
+      setHotkeyInput(cfg.hotkey || "F9");
+      setReplayHotkeyInput(cfg.replayHotkey || "F8");
       setStatus(st);
       setFiles(list);
       if (cfg.customWidth) setCustomWInput(String(cfg.customWidth));
@@ -159,7 +177,13 @@ export default function App() {
       }
     });
 
+    // Checagem assíncrona discreta de atualizações ao iniciar o aplicativo
+    const timer = setTimeout(() => {
+      checkForUpdates(false);
+    }, 2000);
+
     return () => {
+      clearTimeout(timer);
       unlistenStatus.then((u) => u());
       unlistenExport.then((u) => u());
     };
@@ -205,6 +229,19 @@ export default function App() {
     }
   }
 
+  async function handlePickReplayFolder() {
+    if (!config || isRecording) return;
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: config.replayFolder || config.outputDir,
+      title: "Escolha a pasta para salvar os replays do RAVIX",
+    });
+    if (typeof selected === "string" && selected.length > 0) {
+      await updateConfig({ replayFolder: selected });
+    }
+  }
+
   async function handleApplyHotkey() {
     setUiNotice(null);
     try {
@@ -213,6 +250,74 @@ export default function App() {
       setUiNotice({ type: "ok", text: `Atalho global '${hotkeyInput.trim()}' atualizado.` });
     } catch (e) {
       setUiNotice({ type: "err", text: String(e) });
+    }
+  }
+
+  // Verificação e Instalação de Atualizações
+  async function checkForUpdates(manual: boolean = false) {
+    if (updateStatus === "checking" || updateStatus === "downloading") return;
+    setUpdateStatus("checking");
+    setUpdateError(null);
+    try {
+      const update = await check();
+      if (update) {
+        setUpdateObj(update);
+        setUpdateStatus("available");
+        if (!manual) {
+          setUiNotice({
+            type: "ok",
+            text: `Nova versão do RAVIX disponível (V${update.version})! Abra a engrenagem de configurações para atualizar.`,
+          });
+        }
+      } else {
+        setUpdateObj(null);
+        setUpdateStatus("up-to-date");
+      }
+    } catch (err) {
+      console.warn("Verificação de atualizações:", err);
+      setUpdateError(String(err));
+      setUpdateStatus("error");
+    }
+  }
+
+  async function handleInstallUpdate() {
+    if (!updateObj) return;
+    if (isRecording || isBusy) {
+      setUiNotice({
+        type: "err",
+        text: "Uma gravação está em andamento. Pare a gravação antes de instalar a atualização.",
+      });
+      return;
+    }
+    if (isExporting) {
+      setUiNotice({
+        type: "err",
+        text: "Uma exportação de vídeo está em andamento. Aguarde a finalização antes de atualizar.",
+      });
+      return;
+    }
+
+    try {
+      setUpdateStatus("downloading");
+      let totalBytes = 0;
+      let downloadedBytes = 0;
+
+      await updateObj.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          totalBytes = event.data.contentLength || 0;
+          setUpdateProgress({ downloaded: 0, total: totalBytes, percent: 0 });
+        } else if (event.event === "Progress") {
+          downloadedBytes += event.data.chunkLength;
+          const pct = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0;
+          setUpdateProgress({ downloaded: downloadedBytes, total: totalBytes, percent: pct });
+        } else if (event.event === "Finished") {
+          setUpdateStatus("downloaded");
+        }
+      });
+    } catch (err) {
+      console.error("Falha ao instalar atualização:", err);
+      setUpdateError(String(err));
+      setUpdateStatus("error");
     }
   }
 
@@ -357,7 +462,7 @@ export default function App() {
       const sign = stretchPercent >= 0 ? "+" : "";
       return {
         isStretched: true,
-        text: `Esticamento horizontal ativo (${sign}${stretchPercent}% largura) — 0 barras pretas adicionadas (idêntico ao OBS Ctrl+S).`,
+        text: `Esticamento horizontal ativo (${sign}${stretchPercent}% largura) — preenche 100% da tela sem barras pretas adicionadas.`,
         badgeCls: "bg-purple-500/15 text-purple-300 border-purple-500/35",
       };
     } else if (framing === "fit") {
@@ -378,7 +483,7 @@ export default function App() {
   if (!config || !caps || !status) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#090B0E] text-zinc-400">
-        Inicializando motor RAVIX V0.2.0...
+        Inicializando motor RAVIX V0.2.1...
       </div>
     );
   }
@@ -394,7 +499,7 @@ export default function App() {
       case "error":
         return { text: "ERRO", cls: "bg-red-500/20 text-red-300 border-red-500/50", dot: "bg-red-500" };
       default:
-        return { text: "PRONTO", cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/35", dot: "bg-emerald-400" };
+        return null;
     }
   })();
 
@@ -411,12 +516,14 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="text-base font-bold tracking-wider text-white">RAVIX</span>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                  V0.2.0
+                  V0.2.1
                 </span>
-                <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${stateBadge.cls}`}>
-                  <span className={`h-1.5 w-1.5 rounded-full ${stateBadge.dot}`} />
-                  {stateBadge.text}
-                </span>
+                {stateBadge && (
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${stateBadge.cls}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${stateBadge.dot}`} />
+                    {stateBadge.text}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -451,8 +558,8 @@ export default function App() {
           </nav>
         </div>
 
-        {/* Timer / Botão de Gravação Rápida */}
-        <div className="flex items-center gap-4">
+        {/* Timer / Botão de Gravação Rápida / Configurações */}
+        <div className="flex items-center gap-3">
           <div className="text-right">
             <div className="font-mono text-xl font-bold tracking-tight text-white">
               {formatElapsed(status.elapsedSecs)}
@@ -490,6 +597,19 @@ export default function App() {
               </>
             )}
           </button>
+
+          {/* Engrenagem de Configurações Geral do Aplicativo */}
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            className="relative p-2.5 rounded-xl border border-zinc-800 bg-[#121620] hover:bg-[#181d2a] text-zinc-400 hover:text-white transition-all cursor-pointer"
+            title="Configurações do RAVIX"
+          >
+            <Settings className="h-4 w-4" />
+            {updateStatus === "available" && (
+              <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-purple-500 ring-2 ring-[#0D1016] animate-pulse" />
+            )}
+          </button>
         </div>
       </header>
 
@@ -523,20 +643,16 @@ export default function App() {
         <main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-12 gap-5 overflow-y-auto">
           {/* Coluna Esquerda: Controles e Resolução Stretched */}
           <div className="lg:col-span-7 space-y-4">
-            {/* Banner: Gravador — Em desenvolvimento */}
-            <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 px-4 py-3 flex items-center justify-between text-xs text-purple-200">
+            {/* Identificação Discreta: Gravador — Beta */}
+            <div className="flex items-center justify-between rounded-xl border border-purple-500/30 bg-purple-950/20 px-3.5 py-2.5">
               <div className="flex items-center gap-2.5">
-                <Wrench className="h-4 w-4 text-purple-400 shrink-0" />
-                <div>
-                  <span className="font-semibold text-white">Gravador — Em desenvolvimento</span>
-                  <p className="text-[11px] text-zinc-400 mt-0.5">
-                    Estabilidade básica e gravação esticada validadas. Otimizações de frametime e latência em evolução contínua.
-                  </p>
-                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                  Gravador — Beta
+                </span>
+                <span className="text-xs text-zinc-300">
+                  O gravador já pode ser utilizado e continua recebendo melhorias de estabilidade e desempenho.
+                </span>
               </div>
-              <span className="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-purple-950/60 border border-purple-500/30 text-purple-300">
-                WGC + D3D11 HW
-              </span>
             </div>
 
             {/* Perfis Rápidos de Gravação */}
@@ -567,10 +683,11 @@ export default function App() {
                       : "border-zinc-800 bg-[#090B0E] text-zinc-300 hover:border-zinc-700"
                   }`}
                 >
-                  <div className="font-semibold text-xs text-purple-300">FiveM PvP — Stretched 1080p</div>
-                  <div className="text-[11px] text-zinc-400 mt-1">
-                    1920x1080 • Esticar para preencher • 60 FPS
-                  </div>
+                  <div className="font-semibold text-xs text-purple-300">PvP Esticado Full HD</div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5 font-mono">1920 × 1080 · 60 FPS</div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5 leading-snug">
+                    Estica a imagem para preencher o vídeo, sem adicionar barras.
+                  </p>
                 </button>
 
                 <button
@@ -590,9 +707,10 @@ export default function App() {
                   }`}
                 >
                   <div className="font-semibold text-xs text-emerald-300">Padrão Nativo</div>
-                  <div className="text-[11px] text-zinc-400 mt-1">
-                    Resolução Original • Manter proporção
-                  </div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5 font-mono">Resolução original</div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5 leading-snug">
+                    Mantém o formato original da imagem, sem distorcer.
+                  </p>
                 </button>
 
                 <button
@@ -611,10 +729,11 @@ export default function App() {
                       : "border-zinc-800 bg-[#090B0E] text-zinc-300 hover:border-zinc-700"
                   }`}
                 >
-                  <div className="font-semibold text-xs text-purple-300">PvP 1440p Quad HD</div>
-                  <div className="text-[11px] text-zinc-400 mt-1">
-                    2560x1440 • Esticar para preencher
-                  </div>
+                  <div className="font-semibold text-xs text-purple-300">PvP Esticado Quad HD</div>
+                  <div className="text-[11px] text-zinc-400 mt-0.5 font-mono">2560 × 1440</div>
+                  <p className="text-[11px] text-zinc-400 mt-1.5 leading-snug">
+                    Preenche o vídeo em 1440p. Pode exigir mais do PC.
+                  </p>
                 </button>
               </div>
             </section>
@@ -717,10 +836,15 @@ export default function App() {
                     onChange={(e) => updateConfig({ framingMode: e.target.value })}
                     className="w-full rounded-lg border border-purple-500/50 bg-[#090B0E] px-3 py-2 text-sm text-purple-200 font-medium disabled:opacity-60"
                   >
-                    <option value="stretch">Esticar para preencher (OBS Ctrl+S — Sem barras)</option>
-                    <option value="fit">Manter proporção (Adiciona barras)</option>
-                    <option value="fill_crop">Preencher e cortar (Sem barras, corta bordas)</option>
+                    <option value="stretch">Esticar para preencher</option>
+                    <option value="fit">Manter proporção</option>
+                    <option value="fill_crop">Preencher e cortar</option>
                   </select>
+                  <p className="text-[11px] text-zinc-400 mt-1.5 leading-snug">
+                    {config.framingMode === "stretch" && "Esticar para preencher: Ocupa todo o vídeo sem cortar, mas pode alterar as proporções da imagem."}
+                    {config.framingMode === "fit" && "Manter proporção: Mantém o formato da imagem. Podem aparecer barras nas laterais ou acima e abaixo."}
+                    {config.framingMode === "fill_crop" && "Preencher e cortar: Ocupa todo o vídeo sem distorcer, mas pode cortar partes das bordas."}
+                  </p>
                 </div>
 
                 {config.resolutionMode === "custom" && (
@@ -1110,7 +1234,7 @@ export default function App() {
                   Importe um vídeo para editar ou esticar
                 </div>
                 <p className="text-xs text-zinc-400 max-w-sm">
-                  Aceita gravações do OBS Studio (1100×1080), ShadowPlay, Adrenalin ou RAVIX. O arquivo original não será modificado.
+                  Aceita gravações em MP4, MOV ou MKV de qualquer aplicativo de captura ou gravações do RAVIX. O arquivo original não será modificado.
                 </p>
                 <button className="mt-4 px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-semibold text-white flex items-center gap-1.5">
                   <FolderOpen className="h-3.5 w-3.5" />
@@ -1147,9 +1271,9 @@ export default function App() {
                       <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
                       PRÉVIA:{" "}
                       {previewFraming === "stretch"
-                        ? "ESTICAR PARA PREENCHER (OBS Ctrl+S)"
+                        ? "ESTICAR PARA PREENCHER"
                         : previewFraming === "fit"
-                        ? "MANTER PROPORÇÃO (COM BARRAS)"
+                        ? "MANTER PROPORÇÃO"
                         : "PREENCHER E CORTAR"}
                     </div>
                   </div>
@@ -1218,7 +1342,7 @@ export default function App() {
                           : "bg-[#090B0E] text-zinc-400 hover:text-zinc-200 border border-zinc-800"
                       }`}
                     >
-                      Esticar (Ctrl+S)
+                      Esticar para preencher
                     </button>
                     <button
                       onClick={() => setPreviewFraming("fit")}
@@ -1241,6 +1365,11 @@ export default function App() {
                       Preencher e Cortar
                     </button>
                   </div>
+                  <p className="text-[11px] text-zinc-400 mt-1 leading-snug">
+                    {previewFraming === "stretch" && "Esticar para preencher: Ocupa todo o vídeo sem cortar, mas pode alterar as proporções da imagem."}
+                    {previewFraming === "fit" && "Manter proporção: Mantém o formato da imagem. Podem aparecer barras nas laterais ou acima e abaixo."}
+                    {previewFraming === "fill_crop" && "Preencher e cortar: Ocupa todo o vídeo sem distorcer, mas pode cortar partes das bordas."}
+                  </p>
                 </div>
               </div>
             )}
@@ -1361,10 +1490,15 @@ export default function App() {
                       onChange={(e) => setPreviewFraming(e.target.value as any)}
                       className="w-full rounded-lg border border-purple-500/50 bg-[#090B0E] px-3 py-2 text-xs text-purple-200 font-semibold disabled:opacity-50"
                     >
-                      <option value="stretch">Esticar para preencher (OBS Ctrl+S — Sem barras pretas)</option>
-                      <option value="fit">Manter proporção (Letterbox / Pillarbox)</option>
-                      <option value="fill_crop">Preencher e cortar (Sem distorção, corta bordas)</option>
+                      <option value="stretch">Esticar para preencher</option>
+                      <option value="fit">Manter proporção</option>
+                      <option value="fill_crop">Preencher e cortar</option>
                     </select>
+                    <p className="text-[10px] text-zinc-400 mt-1 leading-snug">
+                      {previewFraming === "stretch" && "Esticar para preencher: Ocupa todo o vídeo sem cortar, mas pode alterar as proporções da imagem."}
+                      {previewFraming === "fit" && "Manter proporção: Mantém o formato da imagem. Podem aparecer barras nas laterais ou acima e abaixo."}
+                      {previewFraming === "fill_crop" && "Preencher e cortar: Ocupa todo o vídeo sem distorcer, mas pode cortar partes das bordas."}
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -1480,6 +1614,480 @@ export default function App() {
             </section>
           </div>
         </main>
+      )}
+
+      {/* ======================== MODAL DE CONFIGURAÇÕES GERAIS ======================== */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0E1218] border border-purple-500/40 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-[#121620]">
+              <div className="flex items-center gap-2.5">
+                <Settings className="h-5 w-5 text-purple-400" />
+                <h2 className="text-base font-bold text-white">Configurações do RAVIX</h2>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                  V0.2.1
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSettings(false)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: Tabs & Content */}
+            <div className="flex flex-1 overflow-hidden">
+              {/* Sidebar Tabs */}
+              <div className="w-48 bg-[#0B0D12] border-r border-zinc-800/80 p-3 space-y-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("geral")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "geral"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <Sliders className="h-3.5 w-3.5" />
+                  Geral
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("atalhos")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "atalhos"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <Keyboard className="h-3.5 w-3.5" />
+                  Atalhos
+                  {hasHotkeyConflict && <span className="h-2 w-2 rounded-full bg-red-500 ml-auto" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("gravacoes")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "gravacoes"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  Gravações & Buffer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("captura")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "captura"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                  Captura
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("atualizacoes")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "atualizacoes"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Atualizações
+                  {updateStatus === "available" && <span className="h-2 w-2 rounded-full bg-purple-400 ml-auto animate-pulse" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsTab("sobre")}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                    settingsTab === "sobre"
+                      ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                      : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                  }`}
+                >
+                  <Info className="h-3.5 w-3.5" />
+                  Sobre
+                </button>
+              </div>
+
+              {/* Tab Content */}
+              <div className="flex-1 p-5 overflow-y-auto space-y-4">
+                {/* Aba Geral */}
+                {settingsTab === "geral" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white mb-1">Comportamento Geral</h3>
+                      <p className="text-xs text-zinc-400">Preferências de inicialização e funcionamento em segundo plano.</p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="flex items-start gap-3 p-3 rounded-xl bg-[#121620] border border-zinc-800 cursor-pointer hover:border-zinc-700 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={config.autoStartWithWindows ?? false}
+                          onChange={(e) => updateConfig({ autoStartWithWindows: e.target.checked })}
+                          className="mt-0.5 h-4 w-4 accent-purple-500 rounded cursor-pointer"
+                        />
+                        <div>
+                          <div className="text-xs font-semibold text-white">Iniciar o RAVIX com o Windows</div>
+                          <div className="text-[11px] text-zinc-400">O RAVIX iniciará minimizado na bandeja ao ligar o computador.</div>
+                        </div>
+                      </label>
+
+                      <label className="flex items-start gap-3 p-3 rounded-xl bg-[#121620] border border-zinc-800 cursor-pointer hover:border-zinc-700 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={config.minimizeToTrayOnClose}
+                          onChange={(e) => updateConfig({ minimizeToTrayOnClose: e.target.checked })}
+                          className="mt-0.5 h-4 w-4 accent-purple-500 rounded cursor-pointer"
+                        />
+                        <div>
+                          <div className="text-xs font-semibold text-white">Minimizar para a bandeja ao fechar a janela</div>
+                          <div className="text-[11px] text-zinc-400">Mantém o gravador pronto em segundo plano sem interromper partidas.</div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* Aba Atalhos */}
+                {settingsTab === "atalhos" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white mb-1">Atalhos de Teclado</h3>
+                      <p className="text-xs text-zinc-400">Configure as teclas de ação rápida durante o jogo.</p>
+                    </div>
+
+                    {hasHotkeyConflict && (
+                      <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-200 flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+                        <span>Atenção: Os atalhos de gravação e replay não podem utilizar a mesma tecla.</span>
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-xl bg-[#121620] border border-zinc-800 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-white">Gravar / Parar Gravação Manual</div>
+                          <div className="text-[11px] text-zinc-400">Inicia ou interrompe a captura do jogo.</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={hotkeyInput}
+                            onChange={(e) => setHotkeyInput(e.target.value)}
+                            onBlur={() => {
+                              if (hotkeyInput.trim() && hotkeyInput.trim().toUpperCase() !== config.hotkey) {
+                                updateConfig({ hotkey: hotkeyInput.trim().toUpperCase() });
+                              }
+                            }}
+                            className="w-20 text-center font-mono font-bold text-xs px-2 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-700 text-white uppercase"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-[#121620] border border-zinc-800 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-white">Salvar Buffer de Repetição (Replay)</div>
+                          <div className="text-[11px] text-zinc-400">Salva os últimos segundos do replay configurado.</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={replayHotkeyInput}
+                            onChange={(e) => setReplayHotkeyInput(e.target.value)}
+                            onBlur={() => {
+                              if (replayHotkeyInput.trim() && replayHotkeyInput.trim().toUpperCase() !== config.replayHotkey) {
+                                updateConfig({ replayHotkey: replayHotkeyInput.trim().toUpperCase() });
+                              }
+                            }}
+                            className="w-20 text-center font-mono font-bold text-xs px-2 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-700 text-white uppercase"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Aba Gravações & Buffer */}
+                {settingsTab === "gravacoes" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white mb-1">Armazenamento & Replays</h3>
+                      <p className="text-xs text-zinc-400">Diretórios onde os vídeos gravados e replays são salvos.</p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-xl bg-[#121620] border border-zinc-800 space-y-2">
+                        <label className="block text-xs font-semibold text-white">Pasta Principal de Gravações</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={config.outputDir}
+                            className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-800 text-zinc-300 font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={handlePickFolder}
+                            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-white transition-colors cursor-pointer"
+                          >
+                            Alterar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-[#121620] border border-zinc-800 space-y-2">
+                        <label className="block text-xs font-semibold text-white">Pasta de Replays (Buffer de Repetição)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            readOnly
+                            value={config.replayFolder || `${config.outputDir}\\Replays`}
+                            className="flex-1 text-xs px-3 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-800 text-zinc-300 font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={handlePickReplayFolder}
+                            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-white transition-colors cursor-pointer"
+                          >
+                            Alterar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-[#121620] border border-zinc-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-semibold text-white">Duração do Buffer de Repetição</label>
+                          <span className="text-[10px] text-purple-300 font-mono">Retenção de memória</span>
+                        </div>
+                        <select
+                          value={config.replayDurationSecs ?? 30}
+                          onChange={(e) => updateConfig({ replayDurationSecs: Number(e.target.value) })}
+                          className="w-full text-xs px-3 py-2 rounded-lg bg-[#090B0E] border border-zinc-700 text-zinc-200"
+                        >
+                          <option value={15}>15 segundos (Instantâneo — Menor consumo)</option>
+                          <option value={30}>30 segundos (Padrão para lances PvP)</option>
+                          <option value={60}>1 minuto</option>
+                          <option value={120}>2 minutos</option>
+                          <option value={300}>5 minutos (Maior uso de recursos)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Aba Captura */}
+                {settingsTab === "captura" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white mb-1">Preferências de Captura</h3>
+                      <p className="text-xs text-zinc-400">Recursos do sistema operacional e compatibilidade gráfica.</p>
+                    </div>
+
+                    <div className="p-3.5 rounded-xl bg-[#121620] border border-zinc-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-zinc-300">Desativar Borda Amarela de Captura</span>
+                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">
+                          Indisponível no Win10 19045
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                        No Windows 10 (Build 19045), a API oficial Windows Graphics Capture (WGC) não oferece suporte nativo à remoção da borda amarela de privacidade. Essa opção é suportada exclusivamente a partir do Windows 11 (21H2+). O RAVIX mantém a configuração desabilitada com segurança para não causar falhas gráficas.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Aba Atualizações */}
+                {settingsTab === "atualizacoes" && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold text-white mb-1">Atualizações do RAVIX</h3>
+                        <p className="text-xs text-zinc-400">Instalação direta de novas versões sem abrir navegador.</p>
+                      </div>
+                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                        Canal Beta
+                      </span>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#121620] border border-zinc-800 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold text-white">Versão Instalada</div>
+                          <div className="text-[11px] text-zinc-400">RAVIX Desktop v0.2.1 (x64 Windows)</div>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={updateStatus === "checking" || updateStatus === "downloading"}
+                          onClick={() => checkForUpdates(true)}
+                          className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw className={`h-3.5 w-3.5 ${updateStatus === "checking" ? "animate-spin" : ""}`} />
+                          Verificar Atualizações
+                        </button>
+                      </div>
+
+                      <label className="flex items-center gap-2 pt-2 border-t border-zinc-800/80 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={config.autoCheckUpdates ?? true}
+                          onChange={(e) => updateConfig({ autoCheckUpdates: e.target.checked })}
+                          className="h-4 w-4 accent-purple-500 rounded cursor-pointer"
+                        />
+                        <span className="text-xs text-zinc-300">Verificar atualizações automaticamente ao iniciar o RAVIX</span>
+                      </label>
+                    </div>
+
+                    {/* Status da Verificação */}
+                    {updateStatus === "checking" && (
+                      <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center gap-3">
+                        <RefreshCw className="h-4 w-4 text-purple-400 animate-spin" />
+                        <span className="text-xs text-purple-200">Procurando atualizações...</span>
+                      </div>
+                    )}
+
+                    {updateStatus === "up-to-date" && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center gap-3">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        <span className="text-xs text-emerald-200">Seu RAVIX está atualizado.</span>
+                      </div>
+                    )}
+
+                    {updateStatus === "error" && (
+                      <div className="p-3 rounded-xl bg-zinc-800/80 border border-zinc-700 flex flex-col gap-1.5">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
+                          <AlertTriangle className="h-4 w-4 text-amber-400" />
+                          <span>Atualização não pôde ser concluída.</span>
+                        </div>
+                        <p className="text-[11px] text-zinc-400">
+                          {updateError || "Servidor remoto indisponível ou sem conexão ativa com a internet."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Atualização Disponível */}
+                    {updateStatus === "available" && updateObj && (
+                      <div className="p-4 rounded-xl bg-purple-950/30 border border-purple-500/50 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Sparkles className="h-4 w-4 text-purple-400" />
+                            <span className="text-sm font-bold text-white">Nova versão disponível: RAVIX V{updateObj.version}</span>
+                          </div>
+                        </div>
+
+                        {updateObj.body && (
+                          <div className="p-3 rounded-lg bg-[#090B0E] border border-zinc-800 text-xs text-zinc-300 whitespace-pre-wrap font-sans">
+                            {updateObj.body}
+                          </div>
+                        )}
+
+                        {(isRecording || isExporting) ? (
+                          <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                            <span>
+                              {isRecording
+                                ? "Uma gravação está em andamento. Pare a gravação antes de instalar a atualização."
+                                : "Uma exportação de vídeo está em andamento. Aguarde a finalização antes de atualizar."}
+                            </span>
+                          </div>
+                        ) : null}
+
+                        <div className="flex items-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            disabled={isRecording || isExporting}
+                            onClick={handleInstallUpdate}
+                            className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-xs font-semibold text-white flex items-center gap-2 transition-all cursor-pointer disabled:opacity-40"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Atualizar Agora
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowSettings(false)}
+                            className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-medium text-zinc-300 transition-colors cursor-pointer"
+                          >
+                            Depois
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Progresso do Download */}
+                    {updateStatus === "downloading" && (
+                      <div className="p-4 rounded-xl bg-[#121620] border border-purple-500/40 space-y-3">
+                        <div className="flex items-center justify-between text-xs font-semibold text-white">
+                          <span>Baixando atualização...</span>
+                          <span className="font-mono text-purple-400">{updateProgress?.percent || 0}%</span>
+                        </div>
+                        <div className="w-full h-2 rounded-full bg-zinc-800 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-purple-500 to-emerald-400 transition-all duration-150"
+                            style={{ width: `${updateProgress?.percent || 0}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                          <span>
+                            {updateProgress?.downloaded ? `${(updateProgress.downloaded / (1024 * 1024)).toFixed(1)} MB` : "Iniciando download..."}
+                            {updateProgress?.total ? ` de ${(updateProgress.total / (1024 * 1024)).toFixed(1)} MB` : ""}
+                          </span>
+                          <span>Preparando instalação...</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {updateStatus === "downloaded" && (
+                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/40 text-xs text-emerald-200 flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                        <span>Atualização baixada! O RAVIX será reiniciado automaticamente para concluir a instalação.</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Aba Sobre */}
+                {settingsTab === "sobre" && (
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold text-white mb-1">Sobre o RAVIX</h3>
+                      <p className="text-xs text-zinc-400">Informações técnicas e de desenvolvimento.</p>
+                    </div>
+
+                    <div className="p-4 rounded-xl bg-[#121620] border border-zinc-800 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-xl bg-purple-500/20 border border-purple-500/40 flex items-center justify-center">
+                          <Disc className="h-5 w-5 text-purple-400" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-bold text-white">RAVIX</div>
+                          <div className="text-xs text-purple-300">Gravador & Editor de Highlights PvP</div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-zinc-800/80 text-xs text-zinc-300 space-y-1.5 font-mono">
+                        <div>Versão: <span className="text-white font-bold">0.2.1-beta</span></div>
+                        <div>Plataforma: <span className="text-white">Windows 10 / 11 (x64)</span></div>
+                        <div>Motor Gráfico: <span className="text-purple-300">Direct3D11 Video Processor</span></div>
+                        <div>Captura: <span className="text-purple-300">Windows Graphics Capture (WGC)</span></div>
+                        <div>Codificação: <span className="text-purple-300">Windows Media Foundation Hardware H.264</span></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

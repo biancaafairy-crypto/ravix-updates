@@ -292,9 +292,14 @@ pub fn run() {
     let config_arc = Arc::new(Mutex::new(initial_cfg.clone()));
 
     let run_res = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             logger::info("startup", "Executando setup da interface Tauri...");
             let app_handle = app.handle().clone();
