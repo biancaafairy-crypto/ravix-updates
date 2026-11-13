@@ -138,6 +138,11 @@ impl RecorderManager {
                     );
                     let mut st = status_arc.write();
                     st.state = "idle".to_string();
+                    st.elapsed_secs = 0.0;
+                    st.fps_warning = None;
+                    st.actual_fps = 0.0;
+                    st.cpu_usage_pct = 0.0;
+                    st.memory_mb = 0.0;
                     drop(st);
                     (on_state)("idle");
                     let _ = app.emit("recorder-status", status_arc.read().clone());

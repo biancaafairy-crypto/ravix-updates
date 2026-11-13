@@ -1164,6 +1164,213 @@ mod tests {
     }
 
     #[test]
+    fn test_etapa1_full_montage_workflow() {
+        use crate::models::{AudioTrackExport, RavixProjectData, TimelineClipData, AudioTrackData, MediaAssetInfo};
+
+        let video1 = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-13_07-17-07.mp4";
+        let video2 = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-13_07-19-04.mp4";
+        let music = r"C:\Users\Santarosa\Music\Sons\BluezoneCorp - Alien Interface\Bluezone_BC0300_alien_interface_sci_fi_texture_003.wav";
+
+        if !std::path::Path::new(video1).exists() || !std::path::Path::new(video2).exists() {
+            eprintln!("Gravações reais não encontradas em Videos/RAVIX, pulando test_etapa1_full_montage_workflow");
+            return;
+        }
+
+        println!("\n=== INICIANDO HOMOLOGAÇÃO ETAPA 1.3: TESTE PRÁTICO DO EDITOR ===");
+
+        // 1. Obter metadados dos vídeos e da música
+        let m1 = get_video_metadata(video1).expect("Falha ao ler metadata video1");
+        let m2 = get_video_metadata(video2).expect("Falha ao ler metadata video2");
+        println!("1. Vídeos importados:");
+        println!("   - Vídeo 1: {}x{} dur={:.2}s fps={:.1}", m1.width, m1.height, m1.duration_secs, m1.fps);
+        println!("   - Vídeo 2: {}x{} dur={:.2}s fps={:.1}", m2.width, m2.height, m2.duration_secs, m2.fps);
+
+        // 2 & 3 & 4 & 5 & 6. Montagem: Cortes, Split, Exclusão e Reordenação
+        // Clipe A (origem Vídeo 2): corte de 0.0s a 1.5s (1.5s)
+        // Clipe B (origem Vídeo 1): dividido em 2 partes; parte B1 de 0.5s a 2.0s mantida (1.5s), parte B2 excluída
+        // Reordenação: Clipe A primeiro, depois Clipe B
+        let clip_a = TimelineClipExport {
+            id: "clip_video2".to_string(),
+            source_path: video2.to_string(),
+            in_point_secs: 0.0,
+            out_point_secs: 1.5,
+            volume: 1.0,
+            is_muted: false,
+        };
+        let clip_b1 = TimelineClipExport {
+            id: "clip_video1_part1".to_string(),
+            source_path: video1.to_string(),
+            in_point_secs: 0.5,
+            out_point_secs: 2.0,
+            volume: 0.85,
+            is_muted: false,
+        };
+
+        // 7 & 8. Adicionar trilha de música com volume e fades
+        let has_music = std::path::Path::new(music).exists();
+        let mut music_tracks = Vec::new();
+        if has_music {
+            music_tracks.push(AudioTrackExport {
+                id: "bgm_1".to_string(),
+                source_path: music.to_string(),
+                start_timeline_secs: 0.0,
+                in_point_secs: 0.0,
+                duration_secs: 3.0,
+                volume: 0.7,
+                is_muted: false,
+                fade_in_secs: 0.5,
+                fade_out_secs: 0.5,
+            });
+            println!("2. Música de fundo adicionada: {} (vol=70%, fade=0.5s)", music);
+        }
+
+        // 9 & 10. Persistência de Projeto: Salvar e Reabrir .ravixproj
+        let project_dir = std::env::temp_dir().join("ravix_proj_test");
+        let _ = std::fs::create_dir_all(&project_dir);
+        let project_file = project_dir.join("meu_highlight.ravixproj");
+
+        let project_data = RavixProjectData {
+            version: "0.3.0".to_string(),
+            name: "Meu Highlight FiveM".to_string(),
+            assets: vec![
+                MediaAssetInfo {
+                    id: "asset_1".to_string(),
+                    name: "video1.mp4".to_string(),
+                    path: video1.to_string(),
+                    kind: "video".to_string(),
+                    duration_secs: m1.duration_secs,
+                    width: m1.width,
+                    height: m1.height,
+                    fps: m1.fps,
+                    audio_channels: m1.audio_channels,
+                    audio_sample_rate: m1.audio_sample_rate,
+                    size_bytes: m1.size_bytes,
+                },
+                MediaAssetInfo {
+                    id: "asset_2".to_string(),
+                    name: "video2.mp4".to_string(),
+                    path: video2.to_string(),
+                    kind: "video".to_string(),
+                    duration_secs: m2.duration_secs,
+                    width: m2.width,
+                    height: m2.height,
+                    fps: m2.fps,
+                    audio_channels: m2.audio_channels,
+                    audio_sample_rate: m2.audio_sample_rate,
+                    size_bytes: m2.size_bytes,
+                },
+            ],
+            video_clips: vec![
+                TimelineClipData {
+                    id: clip_a.id.clone(),
+                    asset_id: "asset_2".to_string(),
+                    source_path: clip_a.source_path.clone(),
+                    name: "Vídeo 2 (Corte)".to_string(),
+                    timeline_start_secs: 0.0,
+                    in_point_secs: clip_a.in_point_secs,
+                    out_point_secs: clip_a.out_point_secs,
+                    volume: clip_a.volume,
+                    is_muted: clip_a.is_muted,
+                },
+                TimelineClipData {
+                    id: clip_b1.id.clone(),
+                    asset_id: "asset_1".to_string(),
+                    source_path: clip_b1.source_path.clone(),
+                    name: "Vídeo 1 (Parte 1)".to_string(),
+                    timeline_start_secs: 1.5,
+                    in_point_secs: clip_b1.in_point_secs,
+                    out_point_secs: clip_b1.out_point_secs,
+                    volume: clip_b1.volume,
+                    is_muted: clip_b1.is_muted,
+                },
+            ],
+            music_tracks: if has_music {
+                vec![AudioTrackData {
+                    id: "bgm_1".to_string(),
+                    asset_id: "music_1".to_string(),
+                    source_path: music.to_string(),
+                    name: "BGM Teste".to_string(),
+                    timeline_start_secs: 0.0,
+                    in_point_secs: 0.0,
+                    duration_secs: 3.0,
+                    volume: 0.7,
+                    is_muted: false,
+                    fade_in_secs: 0.5,
+                    fade_out_secs: 0.5,
+                }]
+            } else {
+                vec![]
+            },
+            framing_mode: "fit".to_string(),
+            resolution_mode: "1080p".to_string(),
+            fps: 60,
+            bitrate_kbps: 20000,
+        };
+
+        // Salvar projeto
+        let proj_json = serde_json::to_string_pretty(&project_data).unwrap();
+        std::fs::write(&project_file, &proj_json).unwrap();
+        println!("3. Projeto .ravixproj salvo com sucesso: {:?}", project_file);
+
+        // Reabrir projeto
+        let read_back_json = std::fs::read_to_string(&project_file).unwrap();
+        let loaded_proj: RavixProjectData = serde_json::from_str(&read_back_json).unwrap();
+        assert_eq!(loaded_proj.video_clips.len(), 2);
+        assert_eq!(loaded_proj.video_clips[0].id, "clip_video2");
+        assert_eq!(loaded_proj.video_clips[1].id, "clip_video1_part1");
+        println!("4. Projeto .ravixproj recarregado e validado (2 clipes na ordem correta, BGM configurada).");
+
+        // 11 & 12. Exportação Real do MP4
+        let out_export_file = project_dir.join("highlight_final_homologado.mp4");
+        let _ = std::fs::remove_file(&out_export_file);
+
+        let export_cfg = TimelineExportConfig {
+            output_path: out_export_file.to_string_lossy().to_string(),
+            resolution_mode: "1080p".to_string(),
+            custom_width: None,
+            custom_height: None,
+            framing_mode: "fit".to_string(),
+            fps: 60,
+            bitrate_kbps: 20000,
+            clips: vec![clip_a, clip_b1],
+            music_tracks,
+        };
+
+        println!("5. Iniciando exportação sequencial acelerada por hardware (H.264 HW + AAC)...");
+        let export_res = export_timeline_sync(export_cfg, |p| {
+            if (p.progress_pct as u32) % 25 == 0 {
+                println!("   Progresso: {:.0}% | FPS de renderização: {:.1}", p.progress_pct, p.current_fps);
+            }
+        });
+
+        assert!(export_res.is_ok(), "Falha na exportação: {:?}", export_res);
+        assert!(out_export_file.exists(), "Arquivo exportado não foi criado no disco!");
+
+        // 13. Conferir se o vídeo exportado corresponde à montagem feita
+        let final_meta = get_video_metadata(&out_export_file.to_string_lossy()).expect("Falha ao ler metadata do MP4 exportado");
+        println!("6. Montagem exportada com sucesso:");
+        println!("   - Resolução: {}x{}", final_meta.width, final_meta.height);
+        println!("   - Taxa de quadros: {:.1} FPS", final_meta.fps);
+        println!("   - Duração final: {:.2}s (Esperado: 3.0s)", final_meta.duration_secs);
+        println!("   - Codec de vídeo: {}", final_meta.video_codec);
+        println!("   - Áudio: {} ({}ch @ {}Hz)", final_meta.audio_codec, final_meta.audio_channels, final_meta.audio_sample_rate);
+        println!("   - Tamanho do arquivo: {} bytes ({:.2} MB)", final_meta.size_bytes, final_meta.size_bytes as f64 / 1_048_576.0);
+
+        assert_eq!(final_meta.width, 1920, "Largura deve ser 1920 (1080p)");
+        assert_eq!(final_meta.height, 1080, "Altura deve ser 1080 (1080p)");
+        assert!((final_meta.duration_secs - 3.0).abs() < 0.6, "Duração deve ser aproximadamente 3.0s (1.5s + 1.5s), obtido {:.2}s", final_meta.duration_secs);
+        assert_eq!(final_meta.audio_channels, 2, "Áudio deve ser estéreo (2 canais)");
+        assert!(final_meta.size_bytes > 500_000, "Arquivo deve ter conteúdo real codificado");
+
+        println!("=== HOMOLOGAÇÃO ETAPA 1.3: TESTE PRÁTICO CONCLUÍDO COM 100% DE SUCESSO! ===\n");
+
+        // Limpeza dos arquivos temporários de teste
+        let _ = std::fs::remove_file(&out_export_file);
+        let _ = std::fs::remove_file(&project_file);
+        let _ = std::fs::remove_dir_all(&project_dir);
+    }
+
+    #[test]
     fn test_export_timeline_multi_clip_sequence() {
         let test_video = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-12_13-52-38.mp4";
         let target_video = if std::path::Path::new(test_video).exists() {

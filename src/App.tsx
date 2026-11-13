@@ -320,20 +320,63 @@ export default function App() {
     }
   }
 
-  const selectedSource = useMemo(
-    () => caps?.sources.find((s) => s.id === config?.sourceId && s.kind === config?.sourceKind),
-    [caps, config]
-  );
+  const selectedSource = useMemo(() => {
+    if (!caps || !config) return null;
+    let found = caps.sources.find((s) => s.id === config.sourceId && s.kind === config.sourceKind);
+    if (!found && config.sourceKind === "monitor") {
+      found = caps.sources.find(
+        (s) => s.kind === "monitor" && (s.processName === config.sourceId || s.title.includes(config.sourceId))
+      );
+      if (!found) {
+        found = caps.sources.find((s) => s.kind === "monitor");
+      }
+    }
+    if (!found && config.sourceKind === "window") {
+      found = caps.sources.find((s) => s.kind === "window" && s.processName === config.sourceId);
+    }
+    return found || null;
+  }, [caps, config]);
 
-  // Detecção de resolução da fonte e transformação
+  useEffect(() => {
+    if (
+      selectedSource &&
+      config &&
+      (config.sourceId !== selectedSource.id || config.sourceKind !== selectedSource.kind)
+    ) {
+      updateConfig({ sourceKind: selectedSource.kind, sourceId: selectedSource.id });
+    }
+  }, [selectedSource, config?.sourceId, config?.sourceKind]);
+
+  // Detecção de resolução da fonte e previsão do arquivo final
   const sourceResolutionText = useMemo(() => {
-    if (!selectedSource) return "Detectando...";
+    if (!selectedSource) return "Selecione uma fonte";
     return `${selectedSource.width} × ${selectedSource.height}`;
   }, [selectedSource]);
 
+  const predictedMp4ResolutionText = useMemo(() => {
+    if (!config) return "---";
+    if (config.resolutionMode === "1080p") return "1920 × 1080";
+    if (config.resolutionMode === "1440p") return "2560 × 1440";
+    if (config.resolutionMode === "custom") {
+      return `${config.customWidth || 1920} × ${config.customHeight || 1080}`;
+    }
+    if (selectedSource) {
+      return `${selectedSource.width} × ${selectedSource.height}`;
+    }
+    return "Nativa da fonte";
+  }, [config?.resolutionMode, config?.customWidth, config?.customHeight, selectedSource]);
+
   const transformAnalysis = useMemo(() => {
-    const srcW = selectedSource?.width ?? 1100;
-    const srcH = selectedSource?.height ?? 1080;
+    if (!selectedSource) {
+      return {
+        isStretched: false,
+        text: "Selecione um monitor ou janela para calcular o enquadramento.",
+        badgeCls: "bg-zinc-800/80 text-zinc-400 border-zinc-700/80",
+      };
+    }
+
+    const srcW = selectedSource.width;
+    const srcH = selectedSource.height;
     const mode = config?.resolutionMode ?? "1080p";
     const framing = config?.framingMode ?? "stretch";
 
@@ -350,36 +393,48 @@ export default function App() {
       targetH = config?.customHeight || 1080;
     }
 
-    const srcAr = srcW / srcH;
-    const targetAr = targetW / targetH;
-    const isAlready16x9 = Math.abs(srcAr - targetAr) < 0.02;
-
-    if (isAlready16x9) {
+    // 1. Mapeamento 1:1 nativo real (sem alteração dimensional)
+    if (srcW === targetW && srcH === targetH) {
       return {
         isStretched: false,
-        text: `Fonte já em proporção ${targetW}x${targetH} — mapeamento direto 1:1 sem distorção repetida.`,
+        text: `Mapeamento nativo 1:1 (${srcW}×${srcH}) — captura direta sem redimensionamento.`,
         badgeCls: "bg-emerald-500/10 text-emerald-300 border-emerald-500/30",
       };
     }
 
+    const srcAr = srcW / srcH;
+    const targetAr = targetW / targetH;
+    const isSameAspectRatio = Math.abs(srcAr - targetAr) < 0.02;
+
+    // 2. Proporção idêntica com escala (ex: 2560x1440 -> 1920x1080)
+    if (isSameAspectRatio) {
+      const scaleType = targetW < srcW ? "Redução proporcional (downscale)" : "Upscale proporcional";
+      return {
+        isStretched: false,
+        text: `${scaleType} 16:9 (${srcW}×${srcH} → ${targetW}×${targetH}) sem distorção geométrica.`,
+        badgeCls: "bg-blue-500/10 text-blue-300 border-blue-500/30",
+      };
+    }
+
+    // 3. Proporções diferentes (ex: FiveM 4:3 ou 16:10 para 16:9)
     if (framing === "stretch") {
       const stretchPercent = Math.round(((targetW / targetH) / srcAr - 1) * 100);
       const sign = stretchPercent >= 0 ? "+" : "";
       return {
         isStretched: true,
-        text: `Esticamento horizontal ativo (${sign}${stretchPercent}% largura) — preenche 100% da tela sem barras pretas adicionadas.`,
+        text: `Esticamento horizontal ativo (${sign}${stretchPercent}% largura) — converte ${srcW}×${srcH} em ${targetW}×${targetH} sem barras pretas.`,
         badgeCls: "bg-purple-500/15 text-purple-300 border-purple-500/35",
       };
     } else if (framing === "fit") {
       return {
         isStretched: false,
-        text: `Manter proporção ativo — adiciona barras laterais para enquadrar na tela ${targetW}x${targetH}.`,
-        badgeCls: "bg-blue-500/15 text-blue-300 border-blue-500/35",
+        text: `Manter proporção ativo — preserva ${srcW}×${srcH} com barras laterais (pillarbox) em ${targetW}×${targetH}.`,
+        badgeCls: "bg-zinc-800 text-zinc-300 border-zinc-700",
       };
     } else {
       return {
         isStretched: false,
-        text: `Preencher e cortar ativo — preenche o quadro ${targetW}x${targetH} cortando bordas excedentes sem distorcer.`,
+        text: `Preenchimento com corte (Fill Crop) — preenche ${targetW}×${targetH} cortando bordas excedentes.`,
         badgeCls: "bg-amber-500/15 text-amber-300 border-amber-500/35",
       };
     }
@@ -460,6 +515,12 @@ export default function App() {
                 <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
               )}
             </button>
+            {isRecording && activeTab === "editor" && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-500/30 text-[11px] text-red-300 animate-pulse">
+                <span className="h-2 w-2 rounded-full bg-red-500" />
+                <span>Gravando ({formatElapsed(status.elapsedSecs)})</span>
+              </div>
+            )}
           </nav>
         </div>
 
@@ -467,8 +528,8 @@ export default function App() {
         <div className="flex items-center gap-3">
           <div className="text-right">
             <div className="font-mono text-xl font-bold tracking-tight text-white">
-              {formatElapsed(status.elapsedSecs)}
-              {status.durationLimitSecs ? (
+              {formatElapsed(isRecording ? status.elapsedSecs : 0)}
+              {isRecording && status.durationLimitSecs ? (
                 <span className="text-xs font-normal text-zinc-400">
                   {" / "}
                   {formatElapsed(status.durationLimitSecs)}
@@ -518,10 +579,10 @@ export default function App() {
         </div>
       </header>
 
-      {/* Alertas Globais */}
-      {(uiNotice || status.lastError || status.fpsWarning) && (
+      {/* Alertas do Gravador (apenas visíveis na aba Gravador e enquanto relevantes) */}
+      {activeTab === "recorder" && (uiNotice || (isRecording && status.fpsWarning) || status.lastError) && (
         <div className="px-6 pt-3 space-y-2">
-          {status.fpsWarning && (
+          {isRecording && status.fpsWarning && (
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200 flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
               <span>{status.fpsWarning}</span>
@@ -692,13 +753,7 @@ export default function App() {
                   <div className="text-[11px] text-zinc-400">Resolução do Arquivo MP4</div>
                   <div className="text-sm font-bold text-white mt-0.5 font-mono flex items-center gap-1.5">
                     <Film className="h-3.5 w-3.5 text-emerald-400" />
-                    {config.resolutionMode === "1080p"
-                      ? "1920 × 1080"
-                      : config.resolutionMode === "1440p"
-                      ? "2560 × 1440"
-                      : config.resolutionMode === "custom"
-                      ? `${config.customWidth || 1920} × ${config.customHeight || 1080}`
-                      : sourceResolutionText}
+                    {predictedMp4ResolutionText}
                   </div>
                 </div>
               </div>

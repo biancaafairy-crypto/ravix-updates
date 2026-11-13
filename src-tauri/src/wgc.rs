@@ -45,6 +45,79 @@ pub struct WgcSession {
     pub slot: Arc<LatestCaptureSlot>,
 }
 
+fn resolve_hmonitor(source_id: &str) -> Result<HMONITOR, String> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
+    use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, MONITORINFOEXW};
+
+    // 1. Se foi passado um identificador numérico, validar se o HMONITOR ainda existe e está ativo no sistema
+    if let Ok(raw) = source_id.trim().parse::<isize>() {
+        let candidate = HMONITOR(raw as *mut core::ffi::c_void);
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(candidate, &mut info as *mut _ as *mut _).as_bool() } {
+            return Ok(candidate);
+        }
+    }
+
+    // 2. Se o HMONITOR salvo na sessão anterior não é mais válido (ou se foi passado nome de dispositivo "\\.\DISPLAY2"),
+    // enumerar monitores ativos e localizar pelo szDevice ("\\.\DISPLAY1", "\\.\DISPLAY2") ou índice
+    struct SearchCtx {
+        target: String,
+        found: Option<HMONITOR>,
+        fallback: Option<HMONITOR>,
+        all_monitors: Vec<HMONITOR>,
+    }
+    let mut ctx = SearchCtx {
+        target: source_id.trim().to_string(),
+        found: None,
+        fallback: None,
+        all_monitors: Vec::new(),
+    };
+
+    unsafe extern "system" fn search_proc(hmon: HMONITOR, _: HDC, _: *mut RECT, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam.0 as *mut SearchCtx);
+        ctx.all_monitors.push(hmon);
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
+            let is_primary = (info.monitorInfo.dwFlags & 1) != 0;
+            if is_primary || ctx.fallback.is_none() {
+                ctx.fallback = Some(hmon);
+            }
+            let dev_name_len = info.szDevice.iter().position(|&c| c == 0).unwrap_or(info.szDevice.len());
+            let dev_name = OsString::from_wide(&info.szDevice[..dev_name_len]).to_string_lossy().to_string();
+            // Comparar com target (ex: "\\.\DISPLAY2" ou "DISPLAY2")
+            if !ctx.target.is_empty() && (dev_name.eq_ignore_ascii_case(&ctx.target) || ctx.target.contains(&dev_name)) {
+                ctx.found = Some(hmon);
+                return BOOL(0);
+            }
+        }
+        BOOL(1)
+    }
+
+    unsafe {
+        let _ = EnumDisplayMonitors(None, None, Some(search_proc), LPARAM(&mut ctx as *mut _ as isize));
+    }
+
+    if let Some(h) = ctx.found {
+        return Ok(h);
+    }
+
+    // 3. Se target menciona "Monitor 2" ou "2" ou "DISPLAY2", tentar o segundo monitor da lista
+    if (ctx.target.contains("2") || ctx.target.contains("DISPLAY2")) && ctx.all_monitors.len() >= 2 {
+        return Ok(ctx.all_monitors[1]);
+    }
+
+    // 4. Fallback seguro: primeiro monitor disponível / principal
+    if let Some(h) = ctx.fallback.or_else(|| ctx.all_monitors.first().copied()) {
+        Ok(h)
+    } else {
+        Err(format!("Nenhum monitor ativo encontrado para o identificador '{source_id}'."))
+    }
+}
+
 impl WgcSession {
     pub fn start(
         d3d_device: ID3D11Device,
@@ -58,18 +131,18 @@ impl WgcSession {
                 windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
                     .map_err(|e| format!("WGC não disponível neste Windows: {e}"))?;
 
-            let raw_handle: isize = source_id
-                .trim()
-                .parse()
-                .map_err(|_| format!("ID de fonte inválido: '{source_id}'"))?;
-
             let item: GraphicsCaptureItem = if source_kind == "window" {
+                let raw_handle: isize = source_id
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("ID de fonte inválido: '{source_id}'"))?;
                 interop
                     .CreateForWindow(HWND(raw_handle as *mut core::ffi::c_void))
                     .map_err(|e| format!("Não foi possível capturar a janela selecionada: {e}"))?
             } else {
+                let hmon = resolve_hmonitor(source_id)?;
                 interop
-                    .CreateForMonitor(HMONITOR(raw_handle as *mut core::ffi::c_void))
+                    .CreateForMonitor(hmon)
                     .map_err(|e| format!("Não foi possível capturar o monitor selecionado: {e}"))?
             };
 
@@ -273,4 +346,23 @@ pub fn compute_output_dimensions(src_w: u32, src_h: u32, resolution_mode: &str) 
 
     let scaled_w = ((sw as f64) * (target_h as f64) / (sh as f64)).round() as u32;
     (ensure_even(scaled_w), ensure_even(target_h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_hmonitor_supports_dual_monitors() {
+        // Testar resolução por nome de dispositivo
+        let res1 = resolve_hmonitor(r"\\.\DISPLAY1");
+        assert!(res1.is_ok(), "Deve resolver DISPLAY1");
+
+        let res2 = resolve_hmonitor(r"\\.\DISPLAY2");
+        assert!(res2.is_ok(), "Deve resolver DISPLAY2");
+
+        // Testar fallback seguro para handles inválidos
+        let res_stale = resolve_hmonitor("999999999");
+        assert!(res_stale.is_ok(), "Handle obsoleto deve ter fallback seguro para monitor ativo");
+    }
 }

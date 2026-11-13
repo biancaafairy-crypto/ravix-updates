@@ -67,7 +67,16 @@ fn start_with_arcs(
     let mut cfg = config.lock().clone();
     let caps = collect_capabilities(cfg.output_dir.clone());
 
-    if cfg.source_id.is_empty() {
+    if cfg.source_kind == "monitor" {
+        if !caps.sources.iter().any(|s| s.kind == "monitor" && s.id == cfg.source_id) {
+            // Tentar localizar por process_name (ex: \\.\DISPLAY2) ou fallback para o monitor correspondente
+            if let Some(matching) = caps.sources.iter().find(|s| s.kind == "monitor" && (s.process_name == cfg.source_id || s.title.contains(&cfg.source_id))) {
+                cfg.source_id = matching.id.clone();
+            } else if let Some(first_mon) = caps.sources.iter().find(|s| s.kind == "monitor") {
+                cfg.source_id = first_mon.id.clone();
+            }
+        }
+    } else if cfg.source_id.is_empty() {
         if let Some(first) = caps.sources.first() {
             cfg.source_kind = first.kind.clone();
             cfg.source_id = first.id.clone();
@@ -311,7 +320,15 @@ pub fn run() {
         ),
     );
 
-    if initial_cfg.source_id.is_empty() {
+    if initial_cfg.source_kind == "monitor" {
+        if !caps.sources.iter().any(|s| s.kind == "monitor" && s.id == initial_cfg.source_id) {
+            if let Some(matching) = caps.sources.iter().find(|s| s.kind == "monitor" && (s.process_name == initial_cfg.source_id || s.title.contains(&initial_cfg.source_id))) {
+                initial_cfg.source_id = matching.id.clone();
+            } else if let Some(first_mon) = caps.sources.iter().find(|s| s.kind == "monitor") {
+                initial_cfg.source_id = first_mon.id.clone();
+            }
+        }
+    } else if initial_cfg.source_id.is_empty() {
         if let Some(first) = caps.sources.first() {
             initial_cfg.source_kind = first.kind.clone();
             initial_cfg.source_id = first.id.clone();

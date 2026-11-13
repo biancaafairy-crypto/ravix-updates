@@ -122,8 +122,8 @@ fn enumerate_monitors() -> Vec<CaptureSource> {
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
             let rect = info.monitorInfo.rcMonitor;
-            let width = (rect.right - rect.left).max(0) as u32;
-            let height = (rect.bottom - rect.top).max(0) as u32;
+            let mut width = (rect.right - rect.left).max(0) as u32;
+            let mut height = (rect.bottom - rect.top).max(0) as u32;
 
             let dev_name_len = info
                 .szDevice
@@ -143,9 +143,14 @@ fn enumerate_monitors() -> Vec<CaptureSource> {
                 &mut devmode,
             )
             .as_bool()
-                && devmode.dmDisplayFrequency > 1
             {
-                refresh_hz = devmode.dmDisplayFrequency;
+                if devmode.dmPelsWidth > 0 && devmode.dmPelsHeight > 0 {
+                    width = devmode.dmPelsWidth;
+                    height = devmode.dmPelsHeight;
+                }
+                if devmode.dmDisplayFrequency > 1 {
+                    refresh_hz = devmode.dmDisplayFrequency;
+                }
             }
 
             let is_primary = (info.monitorInfo.dwFlags & 1) != 0;
