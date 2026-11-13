@@ -10,10 +10,26 @@ fn config_file_path() -> PathBuf {
     base.join("config.json")
 }
 
+pub fn get_default_user_video_dir() -> String {
+    dirs::video_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("C:\\")))
+        .join("RAVIX")
+        .to_string_lossy()
+        .to_string()
+}
+
 pub fn load_config() -> RecordingConfig {
     let path = config_file_path();
     if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str::<RecordingConfig>(&content) {
+        if let Ok(mut cfg) = serde_json::from_str::<RecordingConfig>(&content) {
+            // Auto-cura de caminhos herdados do ambiente de desenvolvimento (Etapa 13):
+            // Se o caminho salvo contém "Santarosa" e o diretório real do usuário atual for diferente,
+            // ou se a pasta não existir no disco, migra automaticamente para o diretório de Vídeos do usuário ativo.
+            let current_user_video_dir = get_default_user_video_dir();
+            if cfg.output_dir.contains("Santarosa") && !current_user_video_dir.contains("Santarosa") {
+                cfg.output_dir = current_user_video_dir;
+                let _ = save_config(&cfg);
+            }
             return cfg;
         }
     }

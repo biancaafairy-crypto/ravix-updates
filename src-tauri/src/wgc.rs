@@ -118,6 +118,112 @@ fn resolve_hmonitor(source_id: &str) -> Result<HMONITOR, String> {
     }
 }
 
+pub fn resolve_hwnd(source_id: &str) -> Result<HWND, String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetAncestor, GetClientRect, GetWindowTextLengthW, GetWindowTextW, GetClassNameW,
+        IsIconic, IsWindow, IsWindowVisible, EnumWindows, GA_ROOT,
+    };
+    use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+
+    // 1. Tentar interpretar source_id como handle numérico
+    if let Ok(raw_handle) = source_id.trim().parse::<isize>() {
+        let hwnd = HWND(raw_handle as *mut core::ffi::c_void);
+        if unsafe { IsWindow(hwnd).as_bool() } {
+            // Assegura que usamos a janela raiz top-level (exigência estrita do WGC)
+            let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+            let target = if !root.is_invalid() && unsafe { IsWindow(root).as_bool() } {
+                root
+            } else {
+                hwnd
+            };
+
+            let mut rc = RECT::default();
+            if unsafe { GetClientRect(target, &mut rc).is_ok() } {
+                let w = rc.right - rc.left;
+                let h = rc.bottom - rc.top;
+                if w > 0 && h > 0 {
+                    return Ok(target);
+                }
+            }
+        }
+    }
+
+    // 2. Se o HWND guardado ficou inválido (FiveM reiniciou ou recriou a janela ao mudar modo de tela),
+    // busca dinamicamente pela janela ativa de FiveM / GTA V
+    struct GameSearchCtx {
+        found: Option<HWND>,
+        candidate: Option<HWND>,
+    }
+
+    let mut ctx = GameSearchCtx {
+        found: None,
+        candidate: None,
+    };
+
+    unsafe extern "system" fn enum_game_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam.0 as *mut GameSearchCtx);
+        if !IsWindow(hwnd).as_bool() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return BOOL(1);
+        }
+
+        let mut class_buf = [0u16; 256];
+        let class_len = GetClassNameW(hwnd, &mut class_buf);
+        let class_name = if class_len > 0 {
+            OsString::from_wide(&class_buf[..class_len as usize]).to_string_lossy().to_string()
+        } else {
+            String::new()
+        };
+
+        let title_len = GetWindowTextLengthW(hwnd);
+        let title = if title_len > 0 {
+            let mut title_buf = vec![0u16; (title_len + 1) as usize];
+            let copied = GetWindowTextW(hwnd, &mut title_buf);
+            if copied > 0 {
+                OsString::from_wide(&title_buf[..copied as usize]).to_string_lossy().to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        let w = rc.right - rc.left;
+        let h = rc.bottom - rc.top;
+
+        if w >= 320 && h >= 240 {
+            // FiveM / GTA V utiliza a classe de janela 'grcWindow' para a renderização direta do jogo
+            if class_name.eq_ignore_ascii_case("grcWindow") {
+                ctx.found = Some(hwnd);
+                return BOOL(0);
+            }
+
+            let title_lower = title.to_ascii_lowercase();
+            if title_lower.contains("fivem") || title_lower.contains("grand theft auto") || title_lower.contains("gta v") {
+                ctx.candidate = Some(hwnd);
+            }
+        }
+
+        BOOL(1)
+    }
+
+    unsafe {
+        let _ = EnumWindows(Some(enum_game_proc), LPARAM(&mut ctx as *mut _ as isize));
+    }
+
+    if let Some(h) = ctx.found.or(ctx.candidate) {
+        crate::logger::info("wgc", &format!("Janela de FiveM/jogo localizada dinamicamente: HWND={:?}", h.0));
+        return Ok(h);
+    }
+
+    Err(
+        "A janela selecionada (FiveM/jogo) não está mais visível ou foi recriada. Selecione a fonte novamente nas opções de gravação.".to_string(),
+    )
+}
+
 impl WgcSession {
     pub fn start(
         d3d_device: ID3D11Device,
@@ -132,12 +238,9 @@ impl WgcSession {
                     .map_err(|e| format!("WGC não disponível neste Windows: {e}"))?;
 
             let item: GraphicsCaptureItem = if source_kind == "window" {
-                let raw_handle: isize = source_id
-                    .trim()
-                    .parse()
-                    .map_err(|_| format!("ID de fonte inválido: '{source_id}'"))?;
+                let hwnd = resolve_hwnd(source_id)?;
                 interop
-                    .CreateForWindow(HWND(raw_handle as *mut core::ffi::c_void))
+                    .CreateForWindow(hwnd)
                     .map_err(|e| format!("Não foi possível capturar a janela selecionada: {e}"))?
             } else {
                 let hmon = resolve_hmonitor(source_id)?;

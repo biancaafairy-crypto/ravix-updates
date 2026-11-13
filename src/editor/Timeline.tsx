@@ -9,6 +9,7 @@ interface TimelineProps {
   totalDurationSecs: number;
   zoom: number; // pixels por segundo
   snapping: boolean;
+  isPlaying?: boolean;
   videoClips: TimelineClip[];
   musicTracks: TimelineAudioTrack[];
   selectedClipId: string | null;
@@ -31,6 +32,7 @@ export function Timeline({
   totalDurationSecs,
   zoom,
   snapping,
+  isPlaying,
   videoClips,
   musicTracks,
   selectedClipId,
@@ -44,6 +46,21 @@ export function Timeline({
   const timelineScrollRef = useRef<HTMLDivElement | null>(null);
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null);
+
+  // ETAPA 3: Auto-following durante a reprodução
+  useEffect(() => {
+    if (!isPlaying || isDraggingPlayhead || !timelineScrollRef.current) return;
+    const scrollContainer = timelineScrollRef.current;
+    const playheadPx = playheadSecs * zoom;
+    const scrollLeft = scrollContainer.scrollLeft;
+    const visibleWidth = scrollContainer.clientWidth;
+
+    if (playheadPx > scrollLeft + visibleWidth - 80) {
+      scrollContainer.scrollLeft = playheadPx - 80;
+    } else if (playheadPx < scrollLeft) {
+      scrollContainer.scrollLeft = Math.max(0, playheadPx - 40);
+    }
+  }, [isPlaying, playheadSecs, zoom, isDraggingPlayhead]);
 
   // Determinar extensão total da timeline
   const maxContentDuration = Math.max(
@@ -97,6 +114,17 @@ export function Timeline({
     const handleMouseMove = (e: MouseEvent) => {
       if (!timelineScrollRef.current) return;
       const rect = timelineScrollRef.current.getBoundingClientRect();
+
+      // ETAPA 3: Auto-scroll ao arrastar playhead para próximo da borda (<80px)
+      const relX = e.clientX - rect.left;
+      if (relX < 80) {
+        const speed = Math.max(2, Math.round(((80 - Math.max(0, relX)) / 80) * 18));
+        timelineScrollRef.current.scrollLeft -= speed;
+      } else if (relX > rect.width - 80) {
+        const speed = Math.max(2, Math.round(((Math.min(rect.width, relX) - (rect.width - 80)) / 80) * 18));
+        timelineScrollRef.current.scrollLeft += speed;
+      }
+
       const scrollLeft = timelineScrollRef.current.scrollLeft;
       const clickX = e.clientX - rect.left + scrollLeft;
       let targetSecs = Math.max(0, clickX / zoom);

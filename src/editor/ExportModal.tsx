@@ -265,11 +265,12 @@ export function ExportModal({
                 <label className="block text-zinc-400 font-semibold mb-1.5">
                   Resolução de Saída:
                 </label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {[
-                    { id: "1080p", label: "1080p Full HD", desc: "1920x1080" },
-                    { id: "720p", label: "720p HD", desc: "1280x720" },
-                    { id: "1440p", label: "1440p 2K", desc: "2560x1440" },
+                    { id: "1080p", label: "1080p Full HD", desc: "1920×1080" },
+                    { id: "720p", label: "720p HD", desc: "1280×720" },
+                    { id: "1440p", label: "1440p 2K", desc: "2560×1440" },
+                    { id: "original", label: "Original", desc: "Resolução Nativa" },
                   ].map((res) => (
                     <button
                       key={res.id}
@@ -289,7 +290,7 @@ export function ExportModal({
               </div>
 
               {/* Taxa de Quadros (FPS) e Qualidade */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-zinc-400 font-semibold mb-1.5">
                     Taxa de Quadros (FPS):
@@ -297,11 +298,19 @@ export function ExportModal({
                   <select
                     value={fps}
                     onChange={(e) => setFps(parseInt(e.target.value))}
-                    className="w-full bg-[#121622] border border-zinc-800 rounded-xl px-3 py-2 text-white font-medium"
+                    className="w-full bg-[#121622] border border-zinc-800 rounded-xl px-3 py-2 text-white font-medium cursor-pointer"
                   >
-                    <option value="60">60 FPS (Recomendado)</option>
+                    <option value="60">60 FPS (Padrão recomendado)</option>
                     <option value="30">30 FPS (Mais leve)</option>
+                    <option value="24">24 FPS (Cinemático)</option>
+                    <option value="120">120 FPS (Alta fluidez)</option>
+                    <option value="0">Original (Nativo da gravação)</option>
                   </select>
+                  {fps === 120 && (
+                    <p className="text-[10px] text-purple-300 mt-1 leading-snug bg-purple-950/30 p-1.5 rounded border border-purple-500/30">
+                      Nota: 120 FPS proporciona fluidez extra em monitores de alta taxa de atualização. Gravações capturadas originalmente em taxa inferior serão preservadas sem interpolação artificial de quadros.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -309,11 +318,14 @@ export function ExportModal({
                   <select
                     value={bitrateKbps}
                     onChange={(e) => setBitrateKbps(parseInt(e.target.value))}
-                    className="w-full bg-[#121622] border border-zinc-800 rounded-xl px-3 py-2 text-white font-medium"
+                    className="w-full bg-[#121622] border border-zinc-800 rounded-xl px-3 py-2 text-white font-medium cursor-pointer"
                   >
-                    <option value="25000">Alta (25 Mbps) — Máxima Nitidez</option>
-                    <option value="15000">Média (15 Mbps) — Equilibrada</option>
-                    <option value="8000">Rápida (8 Mbps) — Arquivo Leve</option>
+                    <option value="25000">25 Mbps — Alta Qualidade (Recomendado 1080p)</option>
+                    <option value="10000">10 Mbps — Econômico (Discord / Web)</option>
+                    <option value="15000">15 Mbps — Equilibrado</option>
+                    <option value="35000">35 Mbps — Ultra Qualidade (Recomendado 1440p)</option>
+                    <option value="50000">50 Mbps — Mastering (Edição posterior)</option>
+                    <option value="80000">80 Mbps — Perda Mínima (Fidelidade máxima)</option>
                   </select>
                 </div>
               </div>

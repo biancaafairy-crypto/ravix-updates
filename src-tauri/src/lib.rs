@@ -223,14 +223,59 @@ fn get_app_version(app: AppHandle) -> String {
 }
 
 #[tauri::command]
-fn update_hotkey(hotkey: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let trimmed = hotkey.trim().to_string();
+fn get_default_video_dir() -> String {
+    crate::config::get_default_user_video_dir()
+}
+
+fn validate_hotkey_string(hotkey: &str) -> Result<String, String> {
+    let trimmed = hotkey.trim();
     if trimmed.is_empty() {
-        return Err("Atalho não pode ficar vazio.".to_string());
+        return Err("O atalho não pode ficar vazio.".to_string());
     }
-    register_global_hotkey(&app, &trimmed)?;
+
+    let upper = trimmed.to_uppercase();
+    let f_keys = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+    if f_keys.contains(&upper.as_str()) {
+        return Ok(upper);
+    }
+
+    if trimmed.contains('+') {
+        let parts: Vec<&str> = trimmed.split('+').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if parts.len() < 2 {
+            return Err("Combinação de atalho incompleta.".to_string());
+        }
+        let has_modifier = parts.iter().take(parts.len() - 1).any(|p| {
+            let p_lower = p.to_lowercase();
+            matches!(p_lower.as_str(), "ctrl" | "control" | "alt" | "shift" | "commandorcontrol" | "cmd" | "super" | "win")
+        });
+        if !has_modifier {
+            return Err("A combinação deve incluir ao menos um modificador (Ctrl, Alt ou Shift).".to_string());
+        }
+        return Ok(trimmed.to_string());
+    }
+
+    Err("Letras e números isolados não são permitidos como atalho global. Use F1-F12 ou combine com Ctrl, Alt ou Shift.".to_string())
+}
+
+#[tauri::command]
+fn suspend_hotkey(app: AppHandle) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    Ok(())
+}
+
+#[tauri::command]
+fn resume_hotkey(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let hotkey = state.config.lock().hotkey.clone();
+    register_global_hotkey(&app, &hotkey)
+}
+
+#[tauri::command]
+fn update_hotkey(hotkey: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let validated = validate_hotkey_string(&hotkey)?;
+    register_global_hotkey(&app, &validated)?;
     let mut cfg = state.config.lock();
-    cfg.hotkey = trimmed;
+    cfg.hotkey = validated;
     save_config(&cfg)?;
     Ok(())
 }
@@ -454,6 +499,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            get_default_video_dir,
             get_system_capabilities,
             get_config,
             save_user_config,
@@ -466,6 +512,8 @@ pub fn run() {
             open_video_file,
             open_file_location,
             update_hotkey,
+            suspend_hotkey,
+            resume_hotkey,
             get_video_metadata,
             start_video_export,
             cancel_video_export,

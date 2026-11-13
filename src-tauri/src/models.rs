@@ -275,6 +275,12 @@ pub struct TimelineClipExport {
     pub out_point_secs: f64,
     pub volume: f32, // 0.0 a 2.0
     pub is_muted: bool,
+    #[serde(default)]
+    pub scale: Option<f32>,
+    #[serde(default)]
+    pub position_x: Option<f32>,
+    #[serde(default)]
+    pub position_y: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,6 +324,12 @@ pub struct TimelineClipData {
     pub out_point_secs: f64,
     pub volume: f32,
     pub is_muted: bool,
+    #[serde(default)]
+    pub scale: Option<f32>,
+    #[serde(default)]
+    pub position_x: Option<f32>,
+    #[serde(default)]
+    pub position_y: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

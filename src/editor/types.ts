@@ -23,6 +23,10 @@ export interface TimelineClip {
   durationSecs: number;
   volume: number; // 0.0 a 2.0 (1.0 = normal)
   isMuted: boolean;
+  scale?: number; // 0.5 a 2.0 (1.0 = 100%)
+  positionX?: number; // -50 a 50 (%)
+  positionY?: number; // -50 a 50 (%)
+  framingMode?: "stretch" | "fit" | "fill_crop";
 }
 
 export interface TimelineAudioTrack {
@@ -66,6 +70,9 @@ export interface TimelineExportConfig {
     outPointSecs: number;
     volume: number;
     isMuted: boolean;
+    scale?: number;
+    positionX?: number;
+    positionY?: number;
   }[];
   musicTracks: {
     id: string;

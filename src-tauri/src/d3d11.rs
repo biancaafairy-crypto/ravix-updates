@@ -239,7 +239,7 @@ impl GpuBgraToNv12 {
         })
     }
 
-    unsafe fn configure_rects(&mut self) {
+    pub unsafe fn configure_rects(&mut self) {
         let (src_rect, dst_rect) = crate::geometry::compute_transform_rects(
             self.src_w,
             self.src_h,
@@ -247,6 +247,41 @@ impl GpuBgraToNv12 {
             self.dst_h,
             &self.framing_mode,
         );
+        let target_rect = RECT {
+            left: 0,
+            top: 0,
+            right: self.dst_w as i32,
+            bottom: self.dst_h as i32,
+        };
+        self.video_context
+            .VideoProcessorSetStreamSourceRect(&self.processor, 0, true, Some(&src_rect));
+        self.video_context
+            .VideoProcessorSetStreamDestRect(&self.processor, 0, true, Some(&dst_rect));
+        self.video_context
+            .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&target_rect));
+    }
+
+    pub unsafe fn configure_rects_with_transform(&mut self, scale: f32, pos_x: f32, pos_y: f32) {
+        let (src_rect, mut dst_rect) = crate::geometry::compute_transform_rects(
+            self.src_w,
+            self.src_h,
+            self.dst_w,
+            self.dst_h,
+            &self.framing_mode,
+        );
+        let s = if scale > 0.01 { scale } else { 1.0 };
+        let orig_w = (dst_rect.right - dst_rect.left) as f32;
+        let orig_h = (dst_rect.bottom - dst_rect.top) as f32;
+        let cx = (dst_rect.left + dst_rect.right) as f32 / 2.0 + (pos_x / 100.0) * (self.dst_w as f32);
+        let cy = (dst_rect.top + dst_rect.bottom) as f32 / 2.0 + (pos_y / 100.0) * (self.dst_h as f32);
+        let new_w = orig_w * s;
+        let new_h = orig_h * s;
+
+        dst_rect.left = (cx - new_w / 2.0).round() as i32;
+        dst_rect.top = (cy - new_h / 2.0).round() as i32;
+        dst_rect.right = (cx + new_w / 2.0).round() as i32;
+        dst_rect.bottom = (cy + new_h / 2.0).round() as i32;
+
         let target_rect = RECT {
             left: 0,
             top: 0,

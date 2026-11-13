@@ -9,6 +9,7 @@ import {
   RotateCcw,
   CheckCircle2,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import type {
   MediaAsset,
@@ -20,6 +21,7 @@ import type {
 import { useTimelineHistory } from "./useTimelineHistory";
 import { MediaLibrary } from "./MediaLibrary";
 import { VideoPreview } from "./VideoPreview";
+import { PropertiesPanel } from "./PropertiesPanel";
 import { TimelineToolbar } from "./TimelineToolbar";
 import { Timeline } from "./Timeline";
 import { ExportModal } from "./ExportModal";
@@ -38,6 +40,8 @@ export function VideoEditorView({
   const [framingMode, setFramingMode] = useState<"fit" | "stretch" | "fill_crop">("fit");
   const [zoom, setZoom] = useState<number>(35); // pixels por segundo
   const [snapping, setSnapping] = useState<boolean>(true);
+  const [isPropertiesOpen, setIsPropertiesOpen] = useState<boolean>(true);
+  const [defaultVideoDir, setDefaultVideoDir] = useState<string>("");
 
   // Histórico de Timeline (Clipes de Vídeo e Faixas de Música)
   const {
@@ -75,6 +79,25 @@ export function VideoEditorView({
 
   // Duração Total da Sequência de Vídeo na Timeline
   const totalDurationSecs = videoClips.reduce((acc, c) => acc + c.durationSecs, 0);
+
+  // Auto-dismiss de avisos de sucesso após 4s (ETAPA 7)
+  useEffect(() => {
+    if (editorNotice?.type === "ok") {
+      const timer = setTimeout(() => {
+        setEditorNotice(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [editorNotice]);
+
+  // Carregar diretório padrão de vídeos dinamicamente do usuário (ETAPA 13)
+  useEffect(() => {
+    invoke<string>("get_default_video_dir")
+      .then((dir) => {
+        if (dir) setDefaultVideoDir(dir);
+      })
+      .catch(() => {});
+  }, []);
 
   // Efeito de Reprodução da Timeline (Loop com performance.now)
   const lastTimeRef = useRef<number>(performance.now());
@@ -252,16 +275,11 @@ export function VideoEditorView({
           return [...prev, ...unique];
         });
 
-        // Adiciona a primeira música à timeline se a trilha de música estiver vazia
-        if (musicTracks.length === 0 && newAssets[0]) {
-          handleAddClipToTimeline(newAssets[0]);
-        }
-
         setEditorNotice({
           type: "ok",
           text: `${newAssets.length} ${
             newAssets.length === 1 ? "música importada" : "músicas importadas"
-          } com sucesso.`,
+          } para a Biblioteca de Mídia.`,
         });
       }
     } catch (e) {
@@ -290,11 +308,6 @@ export function VideoEditorView({
         if (prev.some((a) => a.path === newAsset.path)) return prev;
         return [...prev, newAsset];
       });
-
-      // Se a timeline de vídeo estiver vazia, adiciona automaticamente o primeiro vídeo
-      if (videoClips.length === 0) {
-        handleAddClipToTimeline(newAsset);
-      }
     } catch (e) {
       setEditorNotice({ type: "err", text: `Falha ao ler gravação: ${e}` });
     }
@@ -567,6 +580,54 @@ export function VideoEditorView({
     pushState({ videoClips, musicTracks: nextMusic });
   }
 
+  // Atualizar Propriedades do Clipe (via Painel de Propriedades)
+  function handleUpdateClipProperties(clipId: string, updates: Partial<TimelineClip>) {
+    const nextClips = videoClips.map((c) => (c.id === clipId ? { ...c, ...updates } : c));
+    const recalculated = recalculateStartTimes(nextClips);
+    pushState({ videoClips: recalculated, musicTracks });
+  }
+
+  // Atualizar Propriedades da Música (via Painel de Propriedades)
+  function handleUpdateMusicProperties(trackId: string, updates: Partial<TimelineAudioTrack>) {
+    const nextMusic = musicTracks.map((m) => (m.id === trackId ? { ...m, ...updates } : m));
+    pushState({ videoClips, musicTracks: nextMusic });
+  }
+
+  // Atualizar Transformação do Clipe (via Bounding Box no Preview)
+  function handleUpdateClipTransform(
+    clipId: string,
+    transform: { scale?: number; positionX?: number; positionY?: number }
+  ) {
+    const nextClips = videoClips.map((c) =>
+      c.id === clipId
+        ? {
+            ...c,
+            scale: transform.scale !== undefined ? transform.scale : c.scale,
+            positionX: transform.positionX !== undefined ? transform.positionX : c.positionX,
+            positionY: transform.positionY !== undefined ? transform.positionY : c.positionY,
+          }
+        : c
+    );
+    pushState({ videoClips: nextClips, musicTracks });
+  }
+
+  // Resetar Transformação do Clipe para padrão (100%, 0, 0)
+  function handleResetClipTransform(clipId: string) {
+    handleUpdateClipTransform(clipId, { scale: 1.0, positionX: 0, positionY: 0 });
+    setEditorNotice({ type: "ok", text: "Escala e posição restauradas ao padrão." });
+  }
+
+  // Clipes e músicas selecionados contextualmente
+  const selectedClip =
+    selectedTrackType === "video" && selectedClipId
+      ? videoClips.find((c) => c.id === selectedClipId) ?? null
+      : null;
+
+  const selectedMusic =
+    selectedTrackType === "music" && selectedClipId
+      ? musicTracks.find((m) => m.id === selectedClipId) ?? null
+      : null;
+
   // Reorganizar Clipes por Arraste
   function handleReorderClips(fromIdx: number, toIdx: number) {
     const nextClips = [...videoClips];
@@ -703,6 +764,9 @@ export function VideoEditorView({
           outPointSecs: c.outPointSecs,
           volume: c.volume,
           isMuted: c.isMuted,
+          scale: c.scale,
+          positionX: c.positionX,
+          positionY: c.positionY,
         })),
         musicTracks: musicTracks.map((m) => ({
           id: m.id,
@@ -735,11 +799,10 @@ export function VideoEditorView({
     setIsExporting(false);
   }
 
-  // Caminho de exportação sugerido padrão
-  const suggestedOutputPath = `C:\\Users\\Santarosa\\Videos\\RAVIX\\${projectName.replace(
-    /[^a-zA-Z0-9_-]/g,
-    "_"
-  )}_export_1080p.mp4`;
+  // Caminho de exportação sugerido padrão dinâmico (ETAPA 13)
+  const suggestedOutputPath = defaultVideoDir
+    ? `${defaultVideoDir}\\${projectName.replace(/[^a-zA-Z0-9_-]/g, "_")}_export_1080p.mp4`
+    : `C:\\Users\\${projectName.replace(/[^a-zA-Z0-9_-]/g, "_")}_export_1080p.mp4`;
 
   // Redimensionamento de altura da Timeline
   const handleSplitterMouseDown = (e: React.MouseEvent) => {
@@ -787,7 +850,7 @@ export function VideoEditorView({
         {/* Notificação Rápida */}
         {editorNotice && (
           <div
-            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all truncate max-w-sm ${
+            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all max-w-sm ${
               editorNotice.type === "ok"
                 ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
                 : "bg-red-500/15 text-red-300 border border-red-500/30"
@@ -799,10 +862,18 @@ export function VideoEditorView({
               <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
             )}
             <span className="truncate">{editorNotice.text}</span>
+            <button
+              type="button"
+              onClick={() => setEditorNotice(null)}
+              className="ml-auto p-0.5 hover:text-white rounded cursor-pointer"
+              title="Fechar notificação"
+            >
+              <X className="h-3 w-3" />
+            </button>
           </div>
         )}
 
-        {/* Botões do Projeto */}
+        {/* Botões do Projeto (ETAPA 10) */}
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
@@ -820,7 +891,7 @@ export function VideoEditorView({
             title="Abrir Projeto (.ravixproj)"
           >
             <FolderOpen className="h-3.5 w-3.5" />
-            Abrir...
+            Abrir Projeto
           </button>
           <button
             type="button"
@@ -829,25 +900,26 @@ export function VideoEditorView({
             title="Salvar Projeto (.ravixproj)"
           >
             <Save className="h-3.5 w-3.5" />
-            Salvar
+            Salvar Projeto
           </button>
 
           <div className="h-5 w-px bg-zinc-800 mx-1" />
 
-          {/* Botão Exportar Destacado */}
+          {/* Botão Exportar Destacado (ETAPA 10) */}
           <button
             type="button"
             disabled={videoClips.length === 0}
             onClick={() => setIsExportModalOpen(true)}
             className="px-4 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-md shadow-purple-900/30 transition-all cursor-pointer disabled:opacity-40 disabled:pointer-events-none"
+            title="Salvar MP4 — Exportar montagem final para arquivo de vídeo"
           >
             <Download className="h-3.5 w-3.5" />
-            Exportar MP4
+            Salvar MP4
           </button>
         </div>
       </div>
 
-      {/* 2. Área Central Dividida: Biblioteca (Esquerda) + Prévia Estável (Centro) */}
+      {/* 2. Área Central Dividida: Biblioteca (Esquerda) + Prévia Estável (Centro) + Painel de Propriedades (Direita) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         <MediaLibrary
           assets={assets}
@@ -864,13 +936,39 @@ export function VideoEditorView({
           videoClips={videoClips}
           musicTracks={musicTracks}
           framingMode={framingMode}
-          onPlayPause={() => setIsPlaying((p) => !p)}
+          selectedClipId={selectedClipId}
+          selectedTrackType={selectedTrackType}
+          onPlayPause={() => {
+            if (playheadSecs >= totalDurationSecs - 0.1 && totalDurationSecs > 0) {
+              setPlayheadSecs(0);
+              setIsPlaying(true);
+            } else {
+              setIsPlaying((p) => !p);
+            }
+          }}
+          onRestart={() => {
+            setPlayheadSecs(0);
+            setIsPlaying(true);
+          }}
           onSeek={(newSecs) => setPlayheadSecs(Math.max(0, Math.min(totalDurationSecs, newSecs)))}
           onStepFrame={(dir) =>
             setPlayheadSecs((p) =>
               Math.max(0, Math.min(totalDurationSecs, p + dir * (1 / 60)))
             )
           }
+          onUpdateClipTransform={handleUpdateClipTransform}
+        />
+
+        <PropertiesPanel
+          isOpen={isPropertiesOpen}
+          onToggleOpen={() => setIsPropertiesOpen(!isPropertiesOpen)}
+          selectedTrackType={selectedTrackType}
+          selectedClip={selectedClip}
+          selectedMusic={selectedMusic}
+          assets={assets}
+          onUpdateClip={handleUpdateClipProperties}
+          onUpdateMusic={handleUpdateMusicProperties}
+          onResetClipTransform={handleResetClipTransform}
         />
       </div>
 
@@ -908,6 +1006,7 @@ export function VideoEditorView({
           totalDurationSecs={totalDurationSecs}
           zoom={zoom}
           snapping={snapping}
+          isPlaying={isPlaying}
           videoClips={videoClips}
           musicTracks={musicTracks}
           selectedClipId={selectedClipId}

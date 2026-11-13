@@ -107,6 +107,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"geral" | "atalhos" | "gravacoes" | "captura" | "atualizacoes" | "sobre">("geral");
   const [replayHotkeyInput, setReplayHotkeyInput] = useState("F8");
+  const [recordingTarget, setRecordingTarget] = useState<"main" | "replay" | null>(null);
   const [updateStatus, setUpdateStatus] = useState<
     "idle" | "checking" | "available" | "up-to-date" | "downloading" | "downloaded" | "error"
   >("idle");
@@ -114,6 +115,97 @@ export default function App() {
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<{ downloaded: number; total: number; percent: number } | null>(null);
   const [appVersion, setAppVersion] = useState<string>("");
+
+  // Auto-dismiss de avisos de sucesso após 4s (ETAPA 7)
+  useEffect(() => {
+    if (uiNotice?.type === "ok") {
+      const timer = setTimeout(() => {
+        setUiNotice(null);
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [uiNotice]);
+
+  // Gravador de Atalhos Interativo com Validação (ETAPA 6)
+  useEffect(() => {
+    if (!recordingTarget) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        setRecordingTarget(null);
+        invoke("resume_hotkey").catch(() => {});
+        setUiNotice({ type: "ok", text: "Alteração de atalho cancelada." });
+        return;
+      }
+
+      if (["Control", "Shift", "Alt", "Meta", "CapsLock", "Tab"].includes(e.key)) {
+        return;
+      }
+
+      const parts: string[] = [];
+      if (e.ctrlKey) parts.push("Ctrl");
+      if (e.altKey) parts.push("Alt");
+      if (e.shiftKey) parts.push("Shift");
+
+      let mainKey = "";
+      if (e.code.startsWith("F") && !isNaN(Number(e.code.substring(1)))) {
+        const num = Number(e.code.substring(1));
+        if (num >= 1 && num <= 12) {
+          mainKey = `F${num}`;
+        }
+      }
+
+      if (!mainKey) {
+        if (e.key.length === 1) {
+          mainKey = e.key.toUpperCase();
+        } else if (e.code.startsWith("Key")) {
+          mainKey = e.code.substring(3).toUpperCase();
+        } else if (e.code.startsWith("Digit")) {
+          mainKey = e.code.substring(5);
+        }
+      }
+
+      if (!mainKey) return;
+
+      // Validação: Letras e números isolados sem modificadores não são permitidos
+      if (parts.length === 0 && !mainKey.startsWith("F")) {
+        setUiNotice({
+          type: "err",
+          text: "Letras e números isolados não são permitidos como atalho global. Use F1-F12 ou combine com Ctrl, Alt ou Shift.",
+        });
+        return;
+      }
+
+      const combo = parts.length > 0 ? `${parts.join("+")}+${mainKey}` : mainKey;
+
+      if (recordingTarget === "main") {
+        invoke("update_hotkey", { hotkey: combo })
+          .then(() => {
+            setHotkeyInput(combo);
+            if (config) setConfig({ ...config, hotkey: combo });
+            setRecordingTarget(null);
+            setUiNotice({ type: "ok", text: `Atalho global atualizado para '${combo}'.` });
+          })
+          .catch((err) => {
+            setUiNotice({ type: "err", text: String(err) });
+          });
+      } else if (recordingTarget === "replay") {
+        setReplayHotkeyInput(combo);
+        updateConfig({ replayHotkey: combo });
+        setRecordingTarget(null);
+        invoke("resume_hotkey").catch(() => {});
+        setUiNotice({ type: "ok", text: `Atalho de replay atualizado para '${combo}'.` });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [recordingTarget, config]);
 
   useEffect(() => {
     getVersion()
@@ -537,9 +629,29 @@ export default function App() {
                 </span>
               ) : null}
             </div>
-            <div className="text-[11px] text-zinc-400 flex items-center justify-end gap-1">
+            <div className="text-[11px] text-zinc-400 flex items-center justify-end gap-1.5">
               <Keyboard className="h-3 w-3 text-purple-400" />
-              Atalho: <span className="text-zinc-200 font-semibold">{config.hotkey}</span>
+              <span>Atalho:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  if (recordingTarget === "main") {
+                    setRecordingTarget(null);
+                    invoke("resume_hotkey").catch(() => {});
+                  } else {
+                    setRecordingTarget("main");
+                    invoke("suspend_hotkey").catch(() => {});
+                  }
+                }}
+                className={`font-semibold px-2 py-0.5 rounded text-xs transition-all cursor-pointer ${
+                  recordingTarget === "main"
+                    ? "bg-purple-600 text-white animate-pulse ring-2 ring-purple-400"
+                    : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                }`}
+                title="Clique para alterar o atalho global"
+              >
+                {recordingTarget === "main" ? "Pressione a tecla..." : config.hotkey}
+              </button>
             </div>
           </div>
 
@@ -584,21 +696,43 @@ export default function App() {
       {activeTab === "recorder" && (uiNotice || (isRecording && status.fpsWarning) || status.lastError) && (
         <div className="px-6 pt-3 space-y-2">
           {isRecording && status.fpsWarning && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-              <span>{status.fpsWarning}</span>
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+                <span>{status.fpsWarning}</span>
+              </div>
             </div>
           )}
           {(status.lastError || uiNotice?.type === "err") && (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200 flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
-              <span>{uiNotice?.type === "err" ? uiNotice.text : status.lastError}</span>
+            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+                <span>{uiNotice?.type === "err" ? uiNotice.text : status.lastError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUiNotice(null)}
+                className="p-1 hover:text-white rounded cursor-pointer text-red-300"
+                title="Fechar aviso"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
           {uiNotice?.type === "ok" && (
-            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-              <span>{uiNotice.text}</span>
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs text-emerald-200 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                <span>{uiNotice.text}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUiNotice(null)}
+                className="p-1 hover:text-white rounded cursor-pointer text-emerald-300"
+                title="Fechar aviso"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
         </div>
@@ -1321,17 +1455,39 @@ export default function App() {
                           <div className="text-[11px] text-zinc-400">Inicia ou interrompe a captura do jogo.</div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={hotkeyInput}
-                            onChange={(e) => setHotkeyInput(e.target.value)}
-                            onBlur={() => {
-                              if (hotkeyInput.trim() && hotkeyInput.trim().toUpperCase() !== config.hotkey) {
-                                updateConfig({ hotkey: hotkeyInput.trim().toUpperCase() });
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (recordingTarget === "main") {
+                                setRecordingTarget(null);
+                                invoke("resume_hotkey").catch(() => {});
+                              } else {
+                                setRecordingTarget("main");
+                                invoke("suspend_hotkey").catch(() => {});
                               }
                             }}
-                            className="w-20 text-center font-mono font-bold text-xs px-2 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-700 text-white uppercase"
-                          />
+                            className={`min-w-[150px] text-center font-mono font-bold text-xs px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+                              recordingTarget === "main"
+                                ? "bg-purple-600 border-purple-400 text-white animate-pulse ring-2 ring-purple-400/50 shadow-lg"
+                                : "bg-[#090B0E] border-zinc-700 text-white hover:border-purple-500"
+                            }`}
+                          >
+                            {recordingTarget === "main"
+                              ? "Pressione a tecla..."
+                              : config.hotkey || "F9"}
+                          </button>
+                          {recordingTarget === "main" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecordingTarget(null);
+                                invoke("resume_hotkey").catch(() => {});
+                              }}
+                              className="px-2.5 py-1.5 text-[11px] rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1341,17 +1497,39 @@ export default function App() {
                           <div className="text-[11px] text-zinc-400">Salva os últimos segundos do replay configurado.</div>
                         </div>
                         <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={replayHotkeyInput}
-                            onChange={(e) => setReplayHotkeyInput(e.target.value)}
-                            onBlur={() => {
-                              if (replayHotkeyInput.trim() && replayHotkeyInput.trim().toUpperCase() !== config.replayHotkey) {
-                                updateConfig({ replayHotkey: replayHotkeyInput.trim().toUpperCase() });
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (recordingTarget === "replay") {
+                                setRecordingTarget(null);
+                                invoke("resume_hotkey").catch(() => {});
+                              } else {
+                                setRecordingTarget("replay");
+                                invoke("suspend_hotkey").catch(() => {});
                               }
                             }}
-                            className="w-20 text-center font-mono font-bold text-xs px-2 py-1.5 rounded-lg bg-[#090B0E] border border-zinc-700 text-white uppercase"
-                          />
+                            className={`min-w-[150px] text-center font-mono font-bold text-xs px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+                              recordingTarget === "replay"
+                                ? "bg-purple-600 border-purple-400 text-white animate-pulse ring-2 ring-purple-400/50 shadow-lg"
+                                : "bg-[#090B0E] border-zinc-700 text-white hover:border-purple-500"
+                            }`}
+                          >
+                            {recordingTarget === "replay"
+                              ? "Pressione a tecla..."
+                              : config.replayHotkey || "F8"}
+                          </button>
+                          {recordingTarget === "replay" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRecordingTarget(null);
+                                invoke("resume_hotkey").catch(() => {});
+                              }}
+                              className="px-2.5 py-1.5 text-[11px] rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold cursor-pointer"
+                            >
+                              Cancelar
+                            </button>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1436,13 +1614,13 @@ export default function App() {
 
                     <div className="p-3.5 rounded-xl bg-[#121620] border border-zinc-800 space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-zinc-300">Desativar Borda Amarela de Captura</span>
-                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-500">
-                          Indisponível no Win10 19045
+                        <span className="text-xs font-semibold text-zinc-300">Borda Amarela de Privacidade do Windows</span>
+                        <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                          Recurso Nativo WGC
                         </span>
                       </div>
                       <p className="text-[11px] text-zinc-400 leading-relaxed">
-                        No Windows 10 (Build 19045), a API oficial Windows Graphics Capture (WGC) não oferece suporte nativo à remoção da borda amarela de privacidade. Essa opção é suportada exclusivamente a partir do Windows 11 (21H2+). O RAVIX mantém a configuração desabilitada com segurança para não causar falhas gráficas.
+                        A borda amarela é um recurso de segurança e privacidade nativo do Windows (Windows Graphics Capture - WGC), exibida pelo sistema operacional para indicar visualmente que uma janela ou monitor está sendo capturado por um aplicativo. O RAVIX já suporta a remoção nativa da borda amarela em sistemas Windows 11 atualizados (Build 22000 ou superior), onde a Microsoft disponibilizou a API oficial de desativação (IsBorderRequired = false).
                       </p>
                     </div>
                   </div>

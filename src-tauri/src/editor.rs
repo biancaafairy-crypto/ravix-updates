@@ -799,6 +799,15 @@ where
             &config.framing_mode,
         )?;
 
+        let clip_scale = clip.scale.unwrap_or(1.0);
+        let clip_px = clip.position_x.unwrap_or(0.0);
+        let clip_py = clip.position_y.unwrap_or(0.0);
+        if (clip_scale - 1.0).abs() > 0.001 || clip_px.abs() > 0.001 || clip_py.abs() > 0.001 {
+            unsafe {
+                converter.configure_rects_with_transform(clip_scale, clip_px, clip_py);
+            }
+        }
+
         let (nv12_tex, nv12_view) = converter.create_nv12_texture()?;
 
         let hpath = HSTRING::from(&clip.source_path);
@@ -1196,6 +1205,9 @@ mod tests {
             out_point_secs: 1.5,
             volume: 1.0,
             is_muted: false,
+            scale: None,
+            position_x: None,
+            position_y: None,
         };
         let clip_b1 = TimelineClipExport {
             id: "clip_video1_part1".to_string(),
@@ -1204,6 +1216,9 @@ mod tests {
             out_point_secs: 2.0,
             volume: 0.85,
             is_muted: false,
+            scale: None,
+            position_x: None,
+            position_y: None,
         };
 
         // 7 & 8. Adicionar trilha de música com volume e fades
@@ -1271,6 +1286,9 @@ mod tests {
                     out_point_secs: clip_a.out_point_secs,
                     volume: clip_a.volume,
                     is_muted: clip_a.is_muted,
+                    scale: None,
+                    position_x: None,
+                    position_y: None,
                 },
                 TimelineClipData {
                     id: clip_b1.id.clone(),
@@ -1282,6 +1300,9 @@ mod tests {
                     out_point_secs: clip_b1.out_point_secs,
                     volume: clip_b1.volume,
                     is_muted: clip_b1.is_muted,
+                    scale: None,
+                    position_x: None,
+                    position_y: None,
                 },
             ],
             music_tracks: if has_music {
@@ -1394,6 +1415,9 @@ mod tests {
             out_point_secs: 1.5,
             volume: 1.0,
             is_muted: false,
+            scale: None,
+            position_x: None,
+            position_y: None,
         };
         let clip2 = TimelineClipExport {
             id: "clip_v2".to_string(),
@@ -1402,6 +1426,9 @@ mod tests {
             out_point_secs: 2.0,
             volume: 1.0,
             is_muted: false,
+            scale: None,
+            position_x: None,
+            position_y: None,
         };
 
         // Simulação de corte independente de músicas:
@@ -1519,6 +1546,9 @@ mod tests {
                     out_point_secs: 2.0,
                     volume: 1.0,
                     is_muted: false,
+                    scale: None,
+                    position_x: None,
+                    position_y: None,
                 },
                 TimelineClipExport {
                     id: "clip_2".to_string(),
@@ -1527,6 +1557,9 @@ mod tests {
                     out_point_secs: 4.5,
                     volume: 0.8,
                     is_muted: false,
+                    scale: None,
+                    position_x: None,
+                    position_y: None,
                 },
             ],
             music_tracks: vec![],
