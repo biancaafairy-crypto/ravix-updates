@@ -245,3 +245,105 @@ pub struct ExportProgress {
     pub output_path: Option<String>,
     pub error: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaAssetInfo {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub kind: String, // "video" | "audio"
+    pub duration_secs: f64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub audio_channels: u32,
+    pub audio_sample_rate: u32,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineClipExport {
+    pub id: String,
+    pub source_path: String,
+    pub in_point_secs: f64,
+    pub out_point_secs: f64,
+    pub volume: f32, // 0.0 a 2.0
+    pub is_muted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioTrackExport {
+    pub id: String,
+    pub source_path: String,
+    pub start_timeline_secs: f64,
+    pub in_point_secs: f64,
+    pub duration_secs: f64,
+    pub volume: f32,
+    pub is_muted: bool,
+    pub fade_in_secs: f64,
+    pub fade_out_secs: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineExportConfig {
+    pub output_path: String,
+    pub resolution_mode: String,
+    pub custom_width: Option<u32>,
+    pub custom_height: Option<u32>,
+    pub framing_mode: String, // "fit" | "stretch" | "fill_crop"
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+    pub clips: Vec<TimelineClipExport>,
+    pub music_tracks: Vec<AudioTrackExport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct TimelineClipData {
+    pub id: String,
+    pub asset_id: String,
+    pub source_path: String,
+    pub name: String,
+    pub timeline_start_secs: f64,
+    pub in_point_secs: f64,
+    pub out_point_secs: f64,
+    pub volume: f32,
+    pub is_muted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct AudioTrackData {
+    pub id: String,
+    pub asset_id: String,
+    pub source_path: String,
+    pub name: String,
+    pub timeline_start_secs: f64,
+    pub in_point_secs: f64,
+    pub duration_secs: f64,
+    pub volume: f32,
+    pub is_muted: bool,
+    pub fade_in_secs: f64,
+    pub fade_out_secs: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct RavixProjectData {
+    pub version: String,
+    pub name: String,
+    pub assets: Vec<MediaAssetInfo>,
+    pub video_clips: Vec<TimelineClipData>,
+    pub music_tracks: Vec<AudioTrackData>,
+    pub framing_mode: String,
+    pub resolution_mode: String,
+    pub fps: u32,
+    pub bitrate_kbps: u32,
+}

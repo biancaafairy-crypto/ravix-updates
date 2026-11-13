@@ -1,0 +1,490 @@
+import React, { useRef, useState, useEffect } from "react";
+import { Film, Music } from "lucide-react";
+import type { TimelineClip, TimelineAudioTrack } from "./types";
+
+interface TimelineProps {
+  playheadSecs: number;
+  totalDurationSecs: number;
+  zoom: number; // pixels por segundo
+  snapping: boolean;
+  videoClips: TimelineClip[];
+  musicTracks: TimelineAudioTrack[];
+  selectedClipId: string | null;
+  selectedTrackType: "video" | "music" | null;
+  onSelectClip: (id: string | null, type: "video" | "music" | null) => void;
+  onSeek: (secs: number) => void;
+  onUpdateClip: (clip: TimelineClip) => void;
+  onUpdateMusic: (track: TimelineAudioTrack) => void;
+  onReorderClips: (fromIndex: number, toIndex: number) => void;
+}
+
+function formatRulerTime(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+export function Timeline({
+  playheadSecs,
+  totalDurationSecs,
+  zoom,
+  snapping,
+  videoClips,
+  musicTracks,
+  selectedClipId,
+  selectedTrackType,
+  onSelectClip,
+  onSeek,
+  onUpdateClip,
+  onUpdateMusic,
+  onReorderClips,
+}: TimelineProps) {
+  const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+  const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
+  const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null);
+
+  // Determinar largura total da timeline
+  const maxContentDuration = Math.max(
+    totalDurationSecs,
+    ...musicTracks.map((m) => m.timelineStartSecs + m.durationSecs),
+    10
+  );
+  const timelineWidth = Math.max(1200, (maxContentDuration + 15) * zoom);
+
+  // Tratamento de clique e arrasto na régua de tempo
+  const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!timelineScrollRef.current) return;
+    const rect = timelineScrollRef.current.getBoundingClientRect();
+    const scrollLeft = timelineScrollRef.current.scrollLeft;
+    const clickX = e.clientX - rect.left + scrollLeft;
+    let targetSecs = Math.max(0, clickX / zoom);
+
+    if (snapping) {
+      // Snap para pontos de corte
+      for (const c of videoClips) {
+        if (Math.abs(targetSecs - c.timelineStartSecs) < 0.25) {
+          targetSecs = c.timelineStartSecs;
+          break;
+        }
+        if (Math.abs(targetSecs - (c.timelineStartSecs + c.durationSecs)) < 0.25) {
+          targetSecs = c.timelineStartSecs + c.durationSecs;
+          break;
+        }
+      }
+    }
+
+    onSeek(targetSecs);
+    setIsDraggingPlayhead(true);
+  };
+
+  useEffect(() => {
+    if (!isDraggingPlayhead) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!timelineScrollRef.current) return;
+      const rect = timelineScrollRef.current.getBoundingClientRect();
+      const scrollLeft = timelineScrollRef.current.scrollLeft;
+      const clickX = e.clientX - rect.left + scrollLeft;
+      const targetSecs = Math.max(0, clickX / zoom);
+      onSeek(targetSecs);
+    };
+
+    const handleMouseUp = () => {
+      setIsDraggingPlayhead(false);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDraggingPlayhead, zoom, onSeek]);
+
+  // Marcadores da Régua de Tempo
+  const tickInterval = zoom >= 60 ? 1 : zoom >= 30 ? 5 : 10;
+  const numTicks = Math.ceil(timelineWidth / (tickInterval * zoom));
+  const rulerTicks = Array.from({ length: numTicks }, (_, i) => i * tickInterval);
+
+  // Arrastar e Cortar Bordas do Clipe (Trim In / Trim Out)
+  const handleTrimStart = (
+    e: React.MouseEvent,
+    clip: TimelineClip,
+    edge: "left" | "right"
+  ) => {
+    e.stopPropagation();
+    const startX = e.clientX;
+    const initialIn = clip.inPointSecs;
+    const initialOut = clip.outPointSecs;
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaSecs = (ev.clientX - startX) / zoom;
+      if (edge === "left") {
+        const nextIn = Math.max(0, Math.min(initialOut - 0.2, initialIn + deltaSecs));
+        onUpdateClip({
+          ...clip,
+          inPointSecs: nextIn,
+          durationSecs: clip.outPointSecs - nextIn,
+        });
+      } else {
+        const nextOut = Math.max(clip.inPointSecs + 0.2, initialOut + deltaSecs);
+        onUpdateClip({
+          ...clip,
+          outPointSecs: nextOut,
+          durationSecs: nextOut - clip.inPointSecs,
+        });
+      }
+    };
+
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // Mover faixa de música pela timeline
+  const handleMusicDrag = (e: React.MouseEvent, track: TimelineAudioTrack) => {
+    e.stopPropagation();
+    onSelectClip(track.id, "music");
+    const startX = e.clientX;
+    const initialStart = track.timelineStartSecs;
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaSecs = (ev.clientX - startX) / zoom;
+      const nextStart = Math.max(0, initialStart + deltaSecs);
+      onUpdateMusic({
+        ...track,
+        timelineStartSecs: nextStart,
+      });
+    };
+
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div className="flex-1 flex flex-col bg-[#07090D] overflow-hidden select-none">
+      {/* Container de Faixas com Scroll Horizontal */}
+      <div
+        ref={timelineScrollRef}
+        className="flex-1 overflow-x-auto overflow-y-hidden relative flex flex-col"
+      >
+        <div style={{ width: `${timelineWidth}px` }} className="relative flex-1 flex flex-col">
+          {/* 1. Régua de Tempo */}
+          <div
+            onMouseDown={handleRulerMouseDown}
+            className="h-7 bg-[#0B0E14] border-b border-zinc-800 relative cursor-pointer flex items-end text-[10px] font-mono text-zinc-500"
+          >
+            {rulerTicks.map((sec) => (
+              <div
+                key={sec}
+                style={{ left: `${sec * zoom}px` }}
+                className="absolute bottom-0 flex flex-col items-start pointer-events-none"
+              >
+                <span className="text-[9px] text-zinc-400 pl-1 mb-0.5">
+                  {formatRulerTime(sec)}
+                </span>
+                <div className="h-2 w-px bg-zinc-700" />
+              </div>
+            ))}
+          </div>
+
+          {/* 2. Área das Faixas */}
+          <div className="flex-1 flex flex-col py-2 space-y-2">
+            {/* Faixa 1: Vídeo & Áudio do Jogo */}
+            <div className="h-16 bg-[#0E121A] border-y border-zinc-800/80 relative flex items-center">
+              {/* Rótulo da Faixa */}
+              <div className="absolute left-2 z-10 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-zinc-700/60 text-[10px] font-semibold text-purple-300">
+                <Film className="h-3 w-3 text-purple-400" />
+                VÍDEO
+              </div>
+
+              {/* Blocos dos Clipes de Vídeo */}
+              {videoClips.map((clip, index) => {
+                const isSelected = selectedClipId === clip.id && selectedTrackType === "video";
+                const leftPx = clip.timelineStartSecs * zoom;
+                const widthPx = clip.durationSecs * zoom;
+
+                return (
+                  <div
+                    key={clip.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedClipIndex(index);
+                      e.dataTransfer.setData("text/plain", String(index));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (draggedClipIndex !== null && draggedClipIndex !== index) {
+                        onReorderClips(draggedClipIndex, index);
+                        setDraggedClipIndex(null);
+                      }
+                    }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onSelectClip(clip.id, "video");
+                    }}
+                    style={{
+                      left: `${leftPx}px`,
+                      width: `${Math.max(20, widthPx)}px`,
+                    }}
+                    className={`absolute h-14 rounded-xl border flex items-center justify-between overflow-hidden cursor-pointer transition-all ${
+                      isSelected
+                        ? "bg-gradient-to-r from-purple-900/60 to-purple-800/60 border-purple-400 shadow-lg shadow-purple-950/50 z-20"
+                        : "bg-gradient-to-r from-zinc-800/80 to-[#1C1F2E] border-zinc-700/80 hover:border-purple-500/50 z-10"
+                    }`}
+                  >
+                    {/* Alça de corte esquerdo (Trim In) */}
+                    <div
+                      onMouseDown={(e) => handleTrimStart(e, clip, "left")}
+                      className="w-2.5 h-full bg-purple-500/20 hover:bg-purple-500/60 cursor-ew-resize flex items-center justify-center shrink-0"
+                      title="Arrastar para cortar início"
+                    >
+                      <div className="w-0.5 h-4 bg-purple-300/60 rounded" />
+                    </div>
+
+                    {/* Conteúdo Central do Bloco */}
+                    <div className="flex-1 px-2 min-w-0 overflow-hidden">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-white truncate">
+                        <span className="truncate">{clip.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5">
+                        <span>{clip.durationSecs.toFixed(1)}s</span>
+                        {clip.volume !== 1 && (
+                          <span className="text-purple-300">Vol: {Math.round(clip.volume * 100)}%</span>
+                        )}
+                        {clip.isMuted && <span className="text-red-400 font-bold">MUDO</span>}
+                      </div>
+                    </div>
+
+                    {/* Alça de corte direito (Trim Out) */}
+                    <div
+                      onMouseDown={(e) => handleTrimStart(e, clip, "right")}
+                      className="w-2.5 h-full bg-purple-500/20 hover:bg-purple-500/60 cursor-ew-resize flex items-center justify-center shrink-0"
+                      title="Arrastar para cortar fim"
+                    >
+                      <div className="w-0.5 h-4 bg-purple-300/60 rounded" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Faixa 2: Música de Fundo */}
+            <div className="h-14 bg-[#0B0E14] border-y border-zinc-800/80 relative flex items-center">
+              {/* Rótulo da Faixa */}
+              <div className="absolute left-2 z-10 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-zinc-700/60 text-[10px] font-semibold text-emerald-300">
+                <Music className="h-3 w-3 text-emerald-400" />
+                MÚSICA
+              </div>
+
+              {/* Blocos de Áudio da Música */}
+              {musicTracks.map((track) => {
+                const isSelected = selectedClipId === track.id && selectedTrackType === "music";
+                const leftPx = track.timelineStartSecs * zoom;
+                const widthPx = track.durationSecs * zoom;
+
+                return (
+                  <div
+                    key={track.id}
+                    onMouseDown={(e) => handleMusicDrag(e, track)}
+                    style={{
+                      left: `${leftPx}px`,
+                      width: `${Math.max(20, widthPx)}px`,
+                    }}
+                    className={`absolute h-11 rounded-lg border flex items-center px-3 gap-2 overflow-hidden cursor-move transition-all ${
+                      isSelected
+                        ? "bg-gradient-to-r from-emerald-950/80 to-emerald-900/60 border-emerald-400 shadow-md shadow-emerald-950/40 z-20"
+                        : "bg-gradient-to-r from-emerald-950/40 to-zinc-900 border-emerald-600/40 hover:border-emerald-500/60 z-10"
+                    }`}
+                  >
+                    <Music className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                    <div className="min-w-0 flex-1 truncate">
+                      <span className="text-xs font-medium text-emerald-200 truncate">
+                        {track.name}
+                      </span>
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono">
+                        <span>{track.durationSecs.toFixed(1)}s</span>
+                        <span>Vol: {Math.round(track.volume * 100)}%</span>
+                        {track.fadeInSecs > 0 && <span>Fade In: {track.fadeInSecs}s</span>}
+                        {track.fadeOutSecs > 0 && <span>Fade Out: {track.fadeOutSecs}s</span>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 3. Indicador de Reprodução (Agulha / Playhead) */}
+          <div
+            style={{ left: `${playheadSecs * zoom}px` }}
+            className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col items-center"
+          >
+            {/* Cabeça do Cursor */}
+            <div className="w-3.5 h-3.5 bg-red-500 rotate-45 -mt-1 shadow-md shadow-red-950/80" />
+            {/* Linha Vertical da Agulha */}
+            <div className="w-0.5 flex-1 bg-red-500 shadow-sm shadow-red-950" />
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Painel de Propriedades Rápidas do Clipe Selecionado */}
+      {selectedClipId && (
+        <div className="h-10 px-4 bg-[#0B0D12] border-t border-zinc-800 flex items-center justify-between gap-4 text-xs">
+          {selectedTrackType === "video" && (() => {
+            const clip = videoClips.find((c) => c.id === selectedClipId);
+            if (!clip) return null;
+            return (
+              <div className="flex items-center gap-4 w-full">
+                <span className="font-semibold text-white flex items-center gap-1.5 truncate">
+                  <Film className="h-3.5 w-3.5 text-purple-400" />
+                  {clip.name}
+                </span>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400 text-[11px]">Volume do Jogo:</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={clip.isMuted ? 0 : clip.volume}
+                    onChange={(e) =>
+                      onUpdateClip({
+                        ...clip,
+                        volume: parseFloat(e.target.value),
+                        isMuted: false,
+                      })
+                    }
+                    className="w-20 h-1.5 accent-purple-500 bg-zinc-700 rounded-lg cursor-pointer"
+                  />
+                  <span className="font-mono text-zinc-300 text-[10px]">
+                    {Math.round(clip.volume * 100)}%
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onUpdateClip({ ...clip, isMuted: !clip.isMuted })}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                    clip.isMuted
+                      ? "bg-red-500/20 text-red-300 border border-red-500/40"
+                      : "bg-zinc-800 text-zinc-300 hover:text-white"
+                  }`}
+                >
+                  {clip.isMuted ? "Desativar Mudo" : "Silenciar Áudio"}
+                </button>
+
+                <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400 ml-auto">
+                  <span>Início: {clip.inPointSecs.toFixed(1)}s</span>
+                  <span>Fim: {clip.outPointSecs.toFixed(1)}s</span>
+                  <span className="text-purple-300 font-bold">
+                    Duração: {clip.durationSecs.toFixed(1)}s
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+
+          {selectedTrackType === "music" && (() => {
+            const track = musicTracks.find((m) => m.id === selectedClipId);
+            if (!track) return null;
+            return (
+              <div className="flex items-center gap-4 w-full">
+                <span className="font-semibold text-white flex items-center gap-1.5 truncate">
+                  <Music className="h-3.5 w-3.5 text-emerald-400" />
+                  {track.name}
+                </span>
+
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-400 text-[11px]">Volume da Música:</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1.5"
+                    step="0.05"
+                    value={track.isMuted ? 0 : track.volume}
+                    onChange={(e) =>
+                      onUpdateMusic({
+                        ...track,
+                        volume: parseFloat(e.target.value),
+                        isMuted: false,
+                      })
+                    }
+                    className="w-20 h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
+                  />
+                  <span className="font-mono text-zinc-300 text-[10px]">
+                    {Math.round(track.volume * 100)}%
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-zinc-400">Fade In:</span>
+                  <select
+                    value={track.fadeInSecs}
+                    onChange={(e) =>
+                      onUpdateMusic({
+                        ...track,
+                        fadeInSecs: parseFloat(e.target.value),
+                      })
+                    }
+                    className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200 text-xs"
+                  >
+                    <option value="0">Sem fade</option>
+                    <option value="1">1 segundo</option>
+                    <option value="2">2 segundos</option>
+                    <option value="3">3 segundos</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-zinc-400">Fade Out:</span>
+                  <select
+                    value={track.fadeOutSecs}
+                    onChange={(e) =>
+                      onUpdateMusic({
+                        ...track,
+                        fadeOutSecs: parseFloat(e.target.value),
+                      })
+                    }
+                    className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200 text-xs"
+                  >
+                    <option value="0">Sem fade</option>
+                    <option value="1">1 segundo</option>
+                    <option value="2">2 segundos</option>
+                    <option value="3">3 segundos</option>
+                    <option value="5">5 segundos</option>
+                  </select>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => onUpdateMusic({ ...track, isMuted: !track.isMuted })}
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ml-auto ${
+                    track.isMuted
+                      ? "bg-red-500/20 text-red-300 border border-red-500/40"
+                      : "bg-zinc-800 text-zinc-300 hover:text-white"
+                  }`}
+                >
+                  {track.isMuted ? "Desativar Mudo" : "Silenciar Música"}
+                </button>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
+}

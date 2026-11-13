@@ -231,6 +231,42 @@ fn cancel_video_export() {
     crate::editor::cancel_current_export();
 }
 
+#[tauri::command]
+fn get_media_metadata(path: String) -> Result<crate::models::MediaAssetInfo, String> {
+    crate::editor::get_media_metadata(&path)
+}
+
+#[tauri::command]
+async fn start_timeline_export(config: crate::models::TimelineExportConfig, app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || crate::editor::run_timeline_export(config, app))
+        .await
+        .map_err(|e| format!("Falha interna na exportação da timeline: {e}"))?
+}
+
+#[tauri::command]
+fn cancel_timeline_export() {
+    crate::editor::cancel_current_export();
+}
+
+#[tauri::command]
+fn save_ravix_project(path: String, project_json: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(p, project_json).map_err(|e| format!("Falha ao salvar projeto: {e}"))
+}
+
+#[tauri::command]
+fn load_ravix_project(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Falha ao carregar projeto: {e}"))
+}
+
+#[tauri::command]
+fn check_media_files_exist(paths: Vec<String>) -> Vec<bool> {
+    paths.into_iter().map(|p| std::path::Path::new(&p).exists()).collect()
+}
+
 fn spawn_toggle_from_handle(app_h: &AppHandle) {
     let state = app_h.state::<AppState>();
     let config = state.config.clone();
@@ -401,6 +437,12 @@ pub fn run() {
             get_video_metadata,
             start_video_export,
             cancel_video_export,
+            get_media_metadata,
+            start_timeline_export,
+            cancel_timeline_export,
+            save_ravix_project,
+            load_ravix_project,
+            check_media_files_exist,
         ])
         .run(tauri::generate_context!());
 
