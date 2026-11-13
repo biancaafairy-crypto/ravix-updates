@@ -40,6 +40,7 @@ import type {
   SystemCapabilities,
 } from "./types";
 import { VideoEditorView } from "./editor/VideoEditorView";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 function formatElapsed(secs: number): string {
   const total = Math.max(0, Math.floor(secs));
@@ -464,7 +465,7 @@ export default function App() {
   })();
 
   return (
-    <div className="min-h-screen bg-[#090B0E] text-zinc-100 flex flex-col font-sans select-none">
+    <div className="h-screen bg-[#090B0E] text-zinc-100 flex flex-col font-sans select-none overflow-hidden">
       {/* Top Bar com Navegação em Abas */}
       <header className="border-b border-zinc-800/80 bg-[#0D1016] px-6 py-3.5 flex items-center justify-between gap-4">
         <div className="flex items-center gap-5">
@@ -1147,11 +1148,13 @@ export default function App() {
           </div>
         </main>
       ) : (
-        /* ======================== ABA EDITOR (V0.3.0) ======================== */
-        <VideoEditorView
-          initialVideoPath={editorFile}
-          onClearInitialVideo={() => setEditorFile(null)}
-        />
+        /* ======================== ABA EDITOR (V0.3.1) ======================== */
+        <ErrorBoundary fallbackTitle="Editor de Vídeo RAVIX">
+          <VideoEditorView
+            initialVideoPath={editorFile}
+            onClearInitialVideo={() => setEditorFile(null)}
+          />
+        </ErrorBoundary>
       )}
 
 {/* ======================== MODAL DE CONFIGURAÇÕES GERAIS ======================== */}

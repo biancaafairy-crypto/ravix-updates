@@ -239,9 +239,13 @@ pub struct ExportConfig {
 #[serde(rename_all = "camelCase")]
 pub struct ExportProgress {
     pub state: String, // "idle" | "exporting" | "done" | "error" | "cancelled"
+    #[serde(alias = "progress_pct")]
     pub progress_pct: f32,
+    #[serde(alias = "elapsed_secs")]
     pub elapsed_secs: f64,
+    #[serde(alias = "current_fps")]
     pub current_fps: f64,
+    #[serde(alias = "output_path")]
     pub output_path: Option<String>,
     pub error: Option<String>,
 }

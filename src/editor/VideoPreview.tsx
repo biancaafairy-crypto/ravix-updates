@@ -49,21 +49,32 @@ export function VideoPreview({
   onSeek,
   onStepFrame,
 }: VideoPreviewProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  // Dois reprodutores alternados (A/B) para eliminar qualquer piscada preta na troca de clipes
+  const videoRefA = useRef<HTMLVideoElement | null>(null);
+  const videoRefB = useRef<HTMLVideoElement | null>(null);
+  const [activePlayer, setActivePlayer] = useState<"A" | "B">("A");
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const [masterVolume, setMasterVolume] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
 
-  // Determinar qual clipe de vídeo está sob a agulha (playhead)
-  const activeClip = videoClips.find(
+  // Encontrar clipe de vídeo sob a agulha
+  const activeClipIndex = videoClips.findIndex(
     (c) =>
       playheadSecs >= c.timelineStartSecs &&
       playheadSecs < c.timelineStartSecs + c.durationSecs
   );
+  const activeClip = activeClipIndex !== -1 ? videoClips[activeClipIndex] : null;
 
-  // Determinar qual faixa de música está ativa na timeline
+  // Próximo clipe (para pré-carregamento contínuo no reprodutor em espera)
+  const nextClip =
+    activeClipIndex !== -1 && activeClipIndex + 1 < videoClips.length
+      ? videoClips[activeClipIndex + 1]
+      : null;
+
+  // Encontrar música de fundo ativa
   const activeMusic = musicTracks.find(
     (m) =>
       !m.isMuted &&
@@ -71,13 +82,14 @@ export function VideoPreview({
       playheadSecs < m.timelineStartSecs + m.durationSecs
   );
 
-  // Sincronizar vídeo
+  // Sincronizar vídeo principal e alternar sem tela preta
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const primary = activePlayer === "A" ? videoRefA.current : videoRefB.current;
+    const standby = activePlayer === "A" ? videoRefB.current : videoRefA.current;
+    if (!primary) return;
 
     if (!activeClip) {
-      if (!video.paused) video.pause();
+      if (!primary.paused) primary.pause();
       return;
     }
 
@@ -85,26 +97,46 @@ export function VideoPreview({
     const targetSourceTime =
       activeClip.inPointSecs + (playheadSecs - activeClip.timelineStartSecs);
 
-    if (video.src !== expectedSrc) {
-      video.src = expectedSrc;
-      video.currentTime = targetSourceTime;
+    // Se o player ativo já está com o mesmo arquivo fonte, apenas ajusta seek suave
+    if (primary.src === expectedSrc) {
+      if (Math.abs(primary.currentTime - targetSourceTime) > 0.15) {
+        primary.currentTime = targetSourceTime;
+      }
+    } else if (standby && standby.src === expectedSrc) {
+      // Se o player em espera já continha o arquivo pré-carregado, troca para ele imediatamente
+      if (Math.abs(standby.currentTime - targetSourceTime) > 0.15) {
+        standby.currentTime = targetSourceTime;
+      }
+      setActivePlayer((p) => (p === "A" ? "B" : "A"));
+      if (isPlaying) standby.play().catch(() => {});
+      primary.pause();
+      return;
     } else {
-      // Ajustar seek se desviar mais de 0.15s para evitar dessincronização
-      if (Math.abs(video.currentTime - targetSourceTime) > 0.15) {
-        video.currentTime = targetSourceTime;
+      // Carrega no player ativo mantendo o último frame até carregar
+      primary.src = expectedSrc;
+      primary.currentTime = targetSourceTime;
+    }
+
+    // Pré-carregar o próximo clipe no player em espera
+    if (standby && nextClip) {
+      const nextSrc = convertFileSrc(nextClip.sourcePath);
+      if (standby.src !== nextSrc) {
+        standby.src = nextSrc;
+        standby.currentTime = nextClip.inPointSecs;
+        standby.pause();
       }
     }
 
-    // Volume do clipe
+    // Ajuste de volume
     const clipVol = (activeClip.isMuted ? 0 : activeClip.volume) * (isMuted ? 0 : masterVolume);
-    video.volume = Math.max(0, Math.min(1, clipVol));
+    primary.volume = Math.max(0, Math.min(1, clipVol));
 
-    if (isPlaying && video.paused) {
-      video.play().catch(() => {});
-    } else if (!isPlaying && !video.paused) {
-      video.pause();
+    if (isPlaying && primary.paused) {
+      primary.play().catch(() => {});
+    } else if (!isPlaying && !primary.paused) {
+      primary.pause();
     }
-  }, [activeClip, isPlaying, playheadSecs, masterVolume, isMuted]);
+  }, [activeClip, isPlaying, playheadSecs, masterVolume, isMuted, activePlayer, nextClip]);
 
   // Sincronizar música de fundo
   useEffect(() => {
@@ -129,7 +161,7 @@ export function VideoPreview({
       }
     }
 
-    // Calcular volume com fade
+    // Curva de volume com Fade In / Fade Out
     let fade = 1.0;
     if (activeMusic.fadeInSecs > 0 && relT < activeMusic.fadeInSecs) {
       fade = relT / activeMusic.fadeInSecs;
@@ -163,7 +195,7 @@ export function VideoPreview({
     }
   }
 
-  // Obter classe CSS de enquadramento
+  // Estilo de enquadramento (sempre contido no viewport estável)
   const objectFitCls =
     framingMode === "stretch"
       ? "object-fill"
@@ -174,13 +206,17 @@ export function VideoPreview({
   return (
     <div
       ref={containerRef}
-      className="flex-1 flex flex-col bg-[#090B0E] p-4 min-w-0 min-h-0 select-none"
+      className="flex-1 min-w-0 min-h-0 flex flex-col bg-[#090B0E] p-3 select-none overflow-hidden"
     >
-      {/* Área da Tela / Player */}
-      <div className="flex-1 relative flex items-center justify-center bg-black rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl">
+      {/* 
+        Área da Tela / Player: 
+        Rigidamente limitada pelo flex-1 e min-h-0 para NUNCA crescer acima do espaço disponível 
+        ou empurrar a timeline para fora da janela.
+      */}
+      <div className="flex-1 min-h-0 min-w-0 relative flex items-center justify-center bg-black rounded-xl overflow-hidden border border-zinc-800/90 shadow-2xl">
         {videoClips.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-zinc-600 gap-3">
-            <Film className="h-16 w-16 stroke-1 text-zinc-700" />
+          <div className="flex flex-col items-center justify-center text-zinc-600 gap-3 p-4">
+            <Film className="h-14 w-14 stroke-1 text-zinc-700" />
             <div className="text-center">
               <p className="text-sm font-semibold text-zinc-400">Pré-visualização da Montagem</p>
               <p className="text-xs text-zinc-600 mt-1">
@@ -190,18 +226,32 @@ export function VideoPreview({
           </div>
         ) : (
           <>
+            {/* Player A */}
             <video
-              ref={videoRef}
-              className={`w-full h-full ${objectFitCls} bg-black`}
+              ref={videoRefA}
+              className={`absolute inset-0 w-full h-full max-w-full max-h-full ${objectFitCls} bg-black transition-opacity duration-75 ${
+                activePlayer === "A" ? "opacity-100 z-10" : "opacity-0 z-0 pointer-events-none"
+              }`}
               playsInline
               disablePictureInPicture
             />
+
+            {/* Player B (Standby/Preloader contínuo) */}
+            <video
+              ref={videoRefB}
+              className={`absolute inset-0 w-full h-full max-w-full max-h-full ${objectFitCls} bg-black transition-opacity duration-75 ${
+                activePlayer === "B" ? "opacity-100 z-10" : "opacity-0 z-0 pointer-events-none"
+              }`}
+              playsInline
+              disablePictureInPicture
+            />
+
             {/* Elemento de áudio para música de fundo */}
             <audio ref={audioRef} />
 
-            {/* Aviso sutil quando não há vídeo no ponto da agulha */}
+            {/* Indicador no fim da sequência de vídeo */}
             {!activeClip && totalDurationSecs > 0 && (
-              <div className="absolute inset-0 bg-black/80 flex items-center justify-center text-xs text-zinc-500 font-mono">
+              <div className="absolute inset-0 bg-black/85 flex items-center justify-center text-xs text-zinc-500 font-mono z-20">
                 [ Fim da sequência de vídeo ]
               </div>
             )}
@@ -210,7 +260,7 @@ export function VideoPreview({
       </div>
 
       {/* Barra de Controles e Transporte */}
-      <div className="mt-3 px-3 py-2 rounded-xl bg-[#10141D] border border-zinc-800 flex items-center justify-between gap-4">
+      <div className="mt-2.5 px-3 py-2 rounded-xl bg-[#10141D] border border-zinc-800 flex items-center justify-between gap-4 shrink-0">
         {/* Controles de Reprodução */}
         <div className="flex items-center gap-1.5">
           <button
@@ -232,7 +282,7 @@ export function VideoPreview({
           <button
             type="button"
             onClick={onPlayPause}
-            className="h-9 w-9 rounded-xl bg-purple-600 hover:bg-purple-500 text-white flex items-center justify-center shadow-md shadow-purple-900/40 transition-all cursor-pointer"
+            className="h-8 w-8 rounded-xl bg-purple-600 hover:bg-purple-500 text-white flex items-center justify-center shadow-md shadow-purple-900/40 transition-all cursor-pointer"
             title={isPlaying ? "Pausar (Espaço)" : "Reproduzir (Espaço)"}
           >
             {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}

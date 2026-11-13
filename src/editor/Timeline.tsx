@@ -1,6 +1,8 @@
 import React, { useRef, useState, useEffect } from "react";
 import { Film, Music } from "lucide-react";
 import type { TimelineClip, TimelineAudioTrack } from "./types";
+import { AudioWaveform } from "./AudioWaveform";
+import { VideoThumbnails } from "./VideoThumbnails";
 
 interface TimelineProps {
   playheadSecs: number;
@@ -43,7 +45,7 @@ export function Timeline({
   const [isDraggingPlayhead, setIsDraggingPlayhead] = useState(false);
   const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null);
 
-  // Determinar largura total da timeline
+  // Determinar extensão total da timeline
   const maxContentDuration = Math.max(
     totalDurationSecs,
     ...musicTracks.map((m) => m.timelineStartSecs + m.durationSecs),
@@ -51,27 +53,39 @@ export function Timeline({
   );
   const timelineWidth = Math.max(1200, (maxContentDuration + 15) * zoom);
 
-  // Tratamento de clique e arrasto na régua de tempo
+  // Pontos candidatos para encaixe magnético (Snapping)
+  const snapPoints = React.useMemo(() => {
+    if (!snapping) return [];
+    const points = [0];
+    for (const c of videoClips) {
+      points.push(c.timelineStartSecs);
+      points.push(c.timelineStartSecs + c.durationSecs);
+    }
+    for (const m of musicTracks) {
+      points.push(m.timelineStartSecs);
+      points.push(m.timelineStartSecs + m.durationSecs);
+    }
+    return Array.from(new Set(points)).sort((a, b) => a - b);
+  }, [snapping, videoClips, musicTracks]);
+
+  const applySnap = (targetSecs: number, tolerance = 0.25): number => {
+    if (!snapping) return targetSecs;
+    for (const p of snapPoints) {
+      if (Math.abs(targetSecs - p) < tolerance) {
+        return p;
+      }
+    }
+    return targetSecs;
+  };
+
+  // Clique e arrasto na régua
   const handleRulerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!timelineScrollRef.current) return;
     const rect = timelineScrollRef.current.getBoundingClientRect();
     const scrollLeft = timelineScrollRef.current.scrollLeft;
     const clickX = e.clientX - rect.left + scrollLeft;
     let targetSecs = Math.max(0, clickX / zoom);
-
-    if (snapping) {
-      // Snap para pontos de corte
-      for (const c of videoClips) {
-        if (Math.abs(targetSecs - c.timelineStartSecs) < 0.25) {
-          targetSecs = c.timelineStartSecs;
-          break;
-        }
-        if (Math.abs(targetSecs - (c.timelineStartSecs + c.durationSecs)) < 0.25) {
-          targetSecs = c.timelineStartSecs + c.durationSecs;
-          break;
-        }
-      }
-    }
+    targetSecs = applySnap(targetSecs);
 
     onSeek(targetSecs);
     setIsDraggingPlayhead(true);
@@ -85,7 +99,8 @@ export function Timeline({
       const rect = timelineScrollRef.current.getBoundingClientRect();
       const scrollLeft = timelineScrollRef.current.scrollLeft;
       const clickX = e.clientX - rect.left + scrollLeft;
-      const targetSecs = Math.max(0, clickX / zoom);
+      let targetSecs = Math.max(0, clickX / zoom);
+      targetSecs = applySnap(targetSecs);
       onSeek(targetSecs);
     };
 
@@ -99,15 +114,15 @@ export function Timeline({
       window.removeEventListener("mousemove", handleMouseMove);
       window.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [isDraggingPlayhead, zoom, onSeek]);
+  }, [isDraggingPlayhead, zoom, onSeek, applySnap]);
 
-  // Marcadores da Régua de Tempo
+  // Marcadores da régua
   const tickInterval = zoom >= 60 ? 1 : zoom >= 30 ? 5 : 10;
   const numTicks = Math.ceil(timelineWidth / (tickInterval * zoom));
   const rulerTicks = Array.from({ length: numTicks }, (_, i) => i * tickInterval);
 
-  // Arrastar e Cortar Bordas do Clipe (Trim In / Trim Out)
-  const handleTrimStart = (
+  // 1. Arrastar e cortar bordas do Clipe de Vídeo (Trim In / Trim Out)
+  const handleVideoTrimStart = (
     e: React.MouseEvent,
     clip: TimelineClip,
     edge: "left" | "right"
@@ -145,7 +160,48 @@ export function Timeline({
     window.addEventListener("mouseup", onUp);
   };
 
-  // Mover faixa de música pela timeline
+  // 2. Arrastar e cortar bordas de Trecho Musical (Trim In / Trim Out)
+  const handleMusicTrimStart = (
+    e: React.MouseEvent,
+    track: TimelineAudioTrack,
+    edge: "left" | "right"
+  ) => {
+    e.stopPropagation();
+    const startX = e.clientX;
+    const initialIn = track.inPointSecs;
+    const initialStart = track.timelineStartSecs;
+    const initialDuration = track.durationSecs;
+
+    const onMove = (ev: MouseEvent) => {
+      const deltaSecs = (ev.clientX - startX) / zoom;
+      if (edge === "left") {
+        const nextIn = Math.max(0, Math.min(initialIn + initialDuration - 0.2, initialIn + deltaSecs));
+        const actualDelta = nextIn - initialIn;
+        onUpdateMusic({
+          ...track,
+          timelineStartSecs: Math.max(0, initialStart + actualDelta),
+          inPointSecs: nextIn,
+          durationSecs: Math.max(0.2, initialDuration - actualDelta),
+        });
+      } else {
+        const nextDur = Math.max(0.2, initialDuration + deltaSecs);
+        onUpdateMusic({
+          ...track,
+          durationSecs: nextDur,
+        });
+      }
+    };
+
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  // 3. Mover faixa de música pela timeline
   const handleMusicDrag = (e: React.MouseEvent, track: TimelineAudioTrack) => {
     e.stopPropagation();
     onSelectClip(track.id, "music");
@@ -154,7 +210,8 @@ export function Timeline({
 
     const onMove = (ev: MouseEvent) => {
       const deltaSecs = (ev.clientX - startX) / zoom;
-      const nextStart = Math.max(0, initialStart + deltaSecs);
+      let nextStart = Math.max(0, initialStart + deltaSecs);
+      nextStart = applySnap(nextStart, 0.2);
       onUpdateMusic({
         ...track,
         timelineStartSecs: nextStart,
@@ -181,7 +238,7 @@ export function Timeline({
           {/* 1. Régua de Tempo */}
           <div
             onMouseDown={handleRulerMouseDown}
-            className="h-7 bg-[#0B0E14] border-b border-zinc-800 relative cursor-pointer flex items-end text-[10px] font-mono text-zinc-500"
+            className="h-7 bg-[#0B0E14] border-b border-zinc-800 relative cursor-pointer flex items-end text-[10px] font-mono text-zinc-500 shrink-0"
           >
             {rulerTicks.map((sec) => (
               <div
@@ -202,7 +259,7 @@ export function Timeline({
             {/* Faixa 1: Vídeo & Áudio do Jogo */}
             <div className="h-16 bg-[#0E121A] border-y border-zinc-800/80 relative flex items-center">
               {/* Rótulo da Faixa */}
-              <div className="absolute left-2 z-10 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-zinc-700/60 text-[10px] font-semibold text-purple-300">
+              <div className="absolute left-2 z-20 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-sm border border-zinc-700/60 text-[10px] font-semibold text-purple-300">
                 <Film className="h-3 w-3 text-purple-400" />
                 VÍDEO
               </div>
@@ -211,7 +268,7 @@ export function Timeline({
               {videoClips.map((clip, index) => {
                 const isSelected = selectedClipId === clip.id && selectedTrackType === "video";
                 const leftPx = clip.timelineStartSecs * zoom;
-                const widthPx = clip.durationSecs * zoom;
+                const widthPx = Math.max(24, clip.durationSecs * zoom);
 
                 return (
                   <div
@@ -237,29 +294,37 @@ export function Timeline({
                     }}
                     style={{
                       left: `${leftPx}px`,
-                      width: `${Math.max(20, widthPx)}px`,
+                      width: `${widthPx}px`,
                     }}
                     className={`absolute h-14 rounded-xl border flex items-center justify-between overflow-hidden cursor-pointer transition-all ${
                       isSelected
-                        ? "bg-gradient-to-r from-purple-900/60 to-purple-800/60 border-purple-400 shadow-lg shadow-purple-950/50 z-20"
-                        : "bg-gradient-to-r from-zinc-800/80 to-[#1C1F2E] border-zinc-700/80 hover:border-purple-500/50 z-10"
+                        ? "bg-gradient-to-r from-purple-900/80 to-purple-800/80 ring-2 ring-purple-400 border-purple-400 shadow-xl shadow-purple-950/60 z-20"
+                        : "bg-gradient-to-r from-zinc-800/90 to-[#1C1F2E] border-zinc-700/80 hover:border-purple-500/50 z-10"
                     }`}
                   >
+                    {/* Miniaturas Reais do Vídeo ao fundo */}
+                    <VideoThumbnails
+                      sourcePath={clip.sourcePath}
+                      inPointSecs={clip.inPointSecs}
+                      durationSecs={clip.durationSecs}
+                      widthPx={widthPx}
+                    />
+
                     {/* Alça de corte esquerdo (Trim In) */}
                     <div
-                      onMouseDown={(e) => handleTrimStart(e, clip, "left")}
-                      className="w-2.5 h-full bg-purple-500/20 hover:bg-purple-500/60 cursor-ew-resize flex items-center justify-center shrink-0"
-                      title="Arrastar para cortar início"
+                      onMouseDown={(e) => handleVideoTrimStart(e, clip, "left")}
+                      className="w-2.5 h-full bg-purple-500/30 hover:bg-purple-500/70 cursor-ew-resize flex items-center justify-center shrink-0 z-10"
+                      title="Arrastar para cortar início (Trim In)"
                     >
-                      <div className="w-0.5 h-4 bg-purple-300/60 rounded" />
+                      <div className="w-0.5 h-4 bg-purple-300 rounded" />
                     </div>
 
                     {/* Conteúdo Central do Bloco */}
-                    <div className="flex-1 px-2 min-w-0 overflow-hidden">
+                    <div className="flex-1 px-2 min-w-0 overflow-hidden z-10 drop-shadow-md">
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-white truncate">
                         <span className="truncate">{clip.name}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono mt-0.5">
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-300 font-mono mt-0.5">
                         <span>{clip.durationSecs.toFixed(1)}s</span>
                         {clip.volume !== 1 && (
                           <span className="text-purple-300">Vol: {Math.round(clip.volume * 100)}%</span>
@@ -270,30 +335,30 @@ export function Timeline({
 
                     {/* Alça de corte direito (Trim Out) */}
                     <div
-                      onMouseDown={(e) => handleTrimStart(e, clip, "right")}
-                      className="w-2.5 h-full bg-purple-500/20 hover:bg-purple-500/60 cursor-ew-resize flex items-center justify-center shrink-0"
-                      title="Arrastar para cortar fim"
+                      onMouseDown={(e) => handleVideoTrimStart(e, clip, "right")}
+                      className="w-2.5 h-full bg-purple-500/30 hover:bg-purple-500/70 cursor-ew-resize flex items-center justify-center shrink-0 z-10"
+                      title="Arrastar para cortar fim (Trim Out)"
                     >
-                      <div className="w-0.5 h-4 bg-purple-300/60 rounded" />
+                      <div className="w-0.5 h-4 bg-purple-300 rounded" />
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Faixa 2: Música de Fundo */}
+            {/* Faixa 2: Músicas de Fundo (Suporte Multitrechos) */}
             <div className="h-14 bg-[#0B0E14] border-y border-zinc-800/80 relative flex items-center">
               {/* Rótulo da Faixa */}
-              <div className="absolute left-2 z-10 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/60 border border-zinc-700/60 text-[10px] font-semibold text-emerald-300">
+              <div className="absolute left-2 z-20 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-sm border border-zinc-700/60 text-[10px] font-semibold text-emerald-300">
                 <Music className="h-3 w-3 text-emerald-400" />
                 MÚSICA
               </div>
 
-              {/* Blocos de Áudio da Música */}
+              {/* Blocos de Áudio da Música com Formas de Onda */}
               {musicTracks.map((track) => {
                 const isSelected = selectedClipId === track.id && selectedTrackType === "music";
                 const leftPx = track.timelineStartSecs * zoom;
-                const widthPx = track.durationSecs * zoom;
+                const widthPx = Math.max(24, track.durationSecs * zoom);
 
                 return (
                   <div
@@ -301,25 +366,53 @@ export function Timeline({
                     onMouseDown={(e) => handleMusicDrag(e, track)}
                     style={{
                       left: `${leftPx}px`,
-                      width: `${Math.max(20, widthPx)}px`,
+                      width: `${widthPx}px`,
                     }}
-                    className={`absolute h-11 rounded-lg border flex items-center px-3 gap-2 overflow-hidden cursor-move transition-all ${
+                    className={`absolute h-11 rounded-lg border flex items-center justify-between overflow-hidden cursor-move transition-all ${
                       isSelected
-                        ? "bg-gradient-to-r from-emerald-950/80 to-emerald-900/60 border-emerald-400 shadow-md shadow-emerald-950/40 z-20"
-                        : "bg-gradient-to-r from-emerald-950/40 to-zinc-900 border-emerald-600/40 hover:border-emerald-500/60 z-10"
+                        ? "bg-gradient-to-r from-emerald-950 to-emerald-900/80 ring-2 ring-emerald-400 border-emerald-400 shadow-lg shadow-emerald-950/50 z-20"
+                        : "bg-gradient-to-r from-emerald-950/60 to-zinc-900 border-emerald-600/40 hover:border-emerald-500/60 z-10"
                     }`}
                   >
-                    <Music className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                    <div className="min-w-0 flex-1 truncate">
-                      <span className="text-xs font-medium text-emerald-200 truncate">
-                        {track.name}
-                      </span>
-                      <div className="flex items-center gap-2 text-[10px] text-zinc-400 font-mono">
+                    {/* Alça de corte esquerdo da música (Trim In) */}
+                    <div
+                      onMouseDown={(e) => handleMusicTrimStart(e, track, "left")}
+                      className="w-2 h-full bg-emerald-500/30 hover:bg-emerald-500/70 cursor-ew-resize flex items-center justify-center shrink-0 z-10"
+                      title="Arrastar para cortar início da música"
+                    >
+                      <div className="w-0.5 h-3 bg-emerald-300 rounded" />
+                    </div>
+
+                    {/* Forma de Onda Sonora ao fundo do bloco */}
+                    <AudioWaveform
+                      sourcePath={track.sourcePath}
+                      inPointSecs={track.inPointSecs}
+                      durationSecs={track.durationSecs}
+                      widthPx={widthPx}
+                      heightPx={44}
+                    />
+
+                    {/* Informações do Bloco de Áudio */}
+                    <div className="flex-1 px-2 min-w-0 overflow-hidden z-10 drop-shadow-md">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-200 truncate">
+                        <Music className="h-3 w-3 text-emerald-400 shrink-0" />
+                        <span className="truncate">{track.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-zinc-300 font-mono mt-0.5">
                         <span>{track.durationSecs.toFixed(1)}s</span>
                         <span>Vol: {Math.round(track.volume * 100)}%</span>
-                        {track.fadeInSecs > 0 && <span>Fade In: {track.fadeInSecs}s</span>}
-                        {track.fadeOutSecs > 0 && <span>Fade Out: {track.fadeOutSecs}s</span>}
+                        {track.fadeInSecs > 0 && <span>In: {track.fadeInSecs}s</span>}
+                        {track.fadeOutSecs > 0 && <span>Out: {track.fadeOutSecs}s</span>}
                       </div>
+                    </div>
+
+                    {/* Alça de corte direito da música (Trim Out) */}
+                    <div
+                      onMouseDown={(e) => handleMusicTrimStart(e, track, "right")}
+                      className="w-2 h-full bg-emerald-500/30 hover:bg-emerald-500/70 cursor-ew-resize flex items-center justify-center shrink-0 z-10"
+                      title="Arrastar para cortar fim da música"
+                    >
+                      <div className="w-0.5 h-3 bg-emerald-300 rounded" />
                     </div>
                   </div>
                 );
@@ -340,20 +433,24 @@ export function Timeline({
         </div>
       </div>
 
-      {/* 4. Painel de Propriedades Rápidas do Clipe Selecionado */}
+      {/* 4. Painel de Propriedades Rápidas Padronizado (Item 10) */}
       {selectedClipId && (
-        <div className="h-10 px-4 bg-[#0B0D12] border-t border-zinc-800 flex items-center justify-between gap-4 text-xs">
+        <div className="h-10 px-4 bg-[#0B0D12] border-t border-zinc-800 flex items-center justify-between gap-4 text-xs shrink-0">
           {selectedTrackType === "video" && (() => {
             const clip = videoClips.find((c) => c.id === selectedClipId);
             if (!clip) return null;
             return (
               <div className="flex items-center gap-4 w-full">
-                <span className="font-semibold text-white flex items-center gap-1.5 truncate">
-                  <Film className="h-3.5 w-3.5 text-purple-400" />
-                  {clip.name}
-                </span>
+                {/* Nome limitado com ellipsis e title no hover */}
+                <div
+                  className="max-w-[180px] shrink-0 font-semibold text-white flex items-center gap-1.5 truncate"
+                  title={clip.name}
+                >
+                  <Film className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                  <span className="truncate">{clip.name}</span>
+                </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <span className="text-zinc-400 text-[11px]">Volume do Jogo:</span>
                   <input
                     type="range"
@@ -370,7 +467,7 @@ export function Timeline({
                     }
                     className="w-20 h-1.5 accent-purple-500 bg-zinc-700 rounded-lg cursor-pointer"
                   />
-                  <span className="font-mono text-zinc-300 text-[10px]">
+                  <span className="font-mono text-zinc-300 text-[10px] w-8">
                     {Math.round(clip.volume * 100)}%
                   </span>
                 </div>
@@ -378,7 +475,7 @@ export function Timeline({
                 <button
                   type="button"
                   onClick={() => onUpdateClip({ ...clip, isMuted: !clip.isMuted })}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ${
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer shrink-0 ${
                     clip.isMuted
                       ? "bg-red-500/20 text-red-300 border border-red-500/40"
                       : "bg-zinc-800 text-zinc-300 hover:text-white"
@@ -387,7 +484,7 @@ export function Timeline({
                   {clip.isMuted ? "Desativar Mudo" : "Silenciar Áudio"}
                 </button>
 
-                <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400 ml-auto">
+                <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400 ml-auto shrink-0">
                   <span>Início: {clip.inPointSecs.toFixed(1)}s</span>
                   <span>Fim: {clip.outPointSecs.toFixed(1)}s</span>
                   <span className="text-purple-300 font-bold">
@@ -403,13 +500,20 @@ export function Timeline({
             if (!track) return null;
             return (
               <div className="flex items-center gap-4 w-full">
-                <span className="font-semibold text-white flex items-center gap-1.5 truncate">
-                  <Music className="h-3.5 w-3.5 text-emerald-400" />
-                  {track.name}
-                </span>
+                {/* 
+                  Ordem Padronizada conforme Item 10:
+                  Nome do arquivo | Volume | Fade In | Fade Out | Silenciar
+                */}
+                <div
+                  className="max-w-[180px] shrink-0 font-semibold text-white flex items-center gap-1.5 truncate"
+                  title={track.name}
+                >
+                  <Music className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                  <span className="truncate">{track.name}</span>
+                </div>
 
-                <div className="flex items-center gap-2">
-                  <span className="text-zinc-400 text-[11px]">Volume da Música:</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-zinc-400 text-[11px]">Volume:</span>
                   <input
                     type="range"
                     min="0"
@@ -425,12 +529,12 @@ export function Timeline({
                     }
                     className="w-20 h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
                   />
-                  <span className="font-mono text-zinc-300 text-[10px]">
+                  <span className="font-mono text-zinc-300 text-[10px] w-8">
                     {Math.round(track.volume * 100)}%
                   </span>
                 </div>
 
-                <div className="flex items-center gap-1.5 text-[11px]">
+                <div className="flex items-center gap-1.5 text-[11px] shrink-0">
                   <span className="text-zinc-400">Fade In:</span>
                   <select
                     value={track.fadeInSecs}
@@ -443,13 +547,14 @@ export function Timeline({
                     className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200 text-xs"
                   >
                     <option value="0">Sem fade</option>
-                    <option value="1">1 segundo</option>
-                    <option value="2">2 segundos</option>
-                    <option value="3">3 segundos</option>
+                    <option value="0.5">0.5s</option>
+                    <option value="1">1s</option>
+                    <option value="2">2s</option>
+                    <option value="3">3s</option>
                   </select>
                 </div>
 
-                <div className="flex items-center gap-1.5 text-[11px]">
+                <div className="flex items-center gap-1.5 text-[11px] shrink-0">
                   <span className="text-zinc-400">Fade Out:</span>
                   <select
                     value={track.fadeOutSecs}
@@ -462,17 +567,18 @@ export function Timeline({
                     className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200 text-xs"
                   >
                     <option value="0">Sem fade</option>
-                    <option value="1">1 segundo</option>
-                    <option value="2">2 segundos</option>
-                    <option value="3">3 segundos</option>
-                    <option value="5">5 segundos</option>
+                    <option value="0.5">0.5s</option>
+                    <option value="1">1s</option>
+                    <option value="2">2s</option>
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
                   </select>
                 </div>
 
                 <button
                   type="button"
                   onClick={() => onUpdateMusic({ ...track, isMuted: !track.isMuted })}
-                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer ml-auto ${
+                  className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-colors cursor-pointer shrink-0 ${
                     track.isMuted
                       ? "bg-red-500/20 text-red-300 border border-red-500/40"
                       : "bg-zinc-800 text-zinc-300 hover:text-white"
@@ -480,6 +586,13 @@ export function Timeline({
                 >
                   {track.isMuted ? "Desativar Mudo" : "Silenciar Música"}
                 </button>
+
+                <div className="flex items-center gap-2 font-mono text-[11px] text-zinc-400 ml-auto shrink-0">
+                  <span>Posição: {track.timelineStartSecs.toFixed(1)}s</span>
+                  <span className="text-emerald-300 font-bold">
+                    Duração: {track.durationSecs.toFixed(1)}s
+                  </span>
+                </div>
               </div>
             );
           })()}

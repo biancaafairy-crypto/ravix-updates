@@ -204,6 +204,20 @@ fn open_video_file(path: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_file_location(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !p.exists() {
+        return Err("Arquivo não encontrado no disco.".to_string());
+    }
+    let full_path = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    std::process::Command::new("explorer.exe")
+        .arg(format!("/select,\"{}\"", full_path.display()))
+        .spawn()
+        .map_err(|e| format!("Não foi possível abrir pasta do arquivo: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
@@ -450,6 +464,7 @@ pub fn run() {
             list_recorded_files,
             open_recordings_folder,
             open_video_file,
+            open_file_location,
             update_hotkey,
             get_video_metadata,
             start_video_export,

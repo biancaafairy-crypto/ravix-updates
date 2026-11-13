@@ -6,6 +6,9 @@ import {
   X,
   AlertTriangle,
   Play,
+  FolderOpen,
+  CheckCircle2,
+  RefreshCw,
 } from "lucide-react";
 
 interface ExportModalProps {
@@ -18,9 +21,13 @@ interface ExportModalProps {
   isExporting: boolean;
   exportProgress: {
     state: string;
-    progress_pct: number;
-    elapsed_secs: number;
-    current_fps: number;
+    progressPct?: number;
+    progress_pct?: number;
+    elapsedSecs?: number;
+    elapsed_secs?: number;
+    currentFps?: number;
+    current_fps?: number;
+    outputPath?: string | null;
     output_path?: string | null;
     error?: string | null;
   } | null;
@@ -77,8 +84,43 @@ export function ExportModal({
     });
   }
 
-  const isDone = exportProgress?.state === "done";
-  const isError = exportProgress?.state === "error";
+  // Extração segura de campos suportando tanto camelCase quanto snake_case
+  const state = exportProgress?.state || (isExporting ? "exporting" : "idle");
+  const isDone = state === "done";
+  const isError = state === "error";
+
+  const progressPct = exportProgress
+    ? Math.round(
+        exportProgress.progressPct ??
+          exportProgress.progress_pct ??
+          (isDone ? 100 : 0)
+      )
+    : isDone
+    ? 100
+    : 0;
+
+  const elapsedSecs = exportProgress
+    ? exportProgress.elapsedSecs ?? exportProgress.elapsed_secs ?? 0
+    : 0;
+
+  const currentFps = exportProgress
+    ? exportProgress.currentFps ?? exportProgress.current_fps ?? 0
+    : 0;
+
+  const finalOutputPath =
+    exportProgress?.outputPath ||
+    exportProgress?.output_path ||
+    outputPath ||
+    defaultOutputPath;
+
+  // Descrição amigável da etapa atual
+  const currentStepText = (() => {
+    if (isDone) return "Exportação concluída com sucesso!";
+    if (isError) return "Falha durante o processamento do vídeo.";
+    if (progressPct < 15) return "Preparando mídias e decodificando áudio...";
+    if (progressPct >= 85 && progressPct < 100) return "Finalizando contêiner MP4 e sincronia de áudio...";
+    return `Renderizando timeline por hardware (${progressPct}%)...`;
+  })();
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 select-none">
@@ -108,71 +150,96 @@ export function ExportModal({
           {isExporting || isDone || isError ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <span className="font-semibold text-white">
-                  {isDone
+                <span className="font-semibold text-white flex items-center gap-2">
+                  {isDone ? (
+                    <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                  ) : isError ? (
+                    <AlertTriangle className="h-4 w-4 text-red-400" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 text-purple-400 animate-spin" />
+                  )}
+                  {isExporting
+                    ? `Exportando seu vídeo... ${progressPct}%`
+                    : isDone
                     ? "Exportação concluída com sucesso!"
-                    : isError
-                    ? "Falha durante a exportação"
-                    : "Exportando montagem da timeline..."}
+                    : "Falha na exportação"}
                 </span>
-                <span className="font-mono text-purple-400 font-bold">
-                  {exportProgress ? Math.round(exportProgress.progress_pct) : 0}%
+                <span className="font-mono text-purple-400 font-bold text-sm">
+                  {progressPct}%
                 </span>
               </div>
 
-              {/* Barra de Progresso */}
-              <div className="w-full h-3 rounded-full bg-zinc-800 overflow-hidden">
+              {/* Barra de Progresso Real */}
+              <div className="w-full h-3 rounded-full bg-zinc-800/90 overflow-hidden border border-zinc-700/50">
                 <div
-                  className={`h-full transition-all duration-150 ${
+                  className={`h-full transition-all duration-200 ${
                     isError
                       ? "bg-red-500"
                       : isDone
                       ? "bg-emerald-500"
-                      : "bg-gradient-to-r from-purple-500 to-emerald-400"
+                      : "bg-gradient-to-r from-purple-500 via-indigo-400 to-emerald-400"
                   }`}
-                  style={{
-                    width: `${exportProgress?.progress_pct || (isDone ? 100 : 0)}%`,
-                  }}
+                  style={{ width: `${progressPct}%` }}
                 />
               </div>
 
-              {/* Informações de Renderização */}
-              {isExporting && exportProgress && (
-                <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
-                  <span>Velocidade: {exportProgress.current_fps} FPS</span>
-                  <span>Tempo decorrido: {exportProgress.elapsed_secs.toFixed(1)}s</span>
+              {/* Etapa atual & Telemetria de Renderização */}
+              <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono bg-black/30 p-2.5 rounded-xl border border-zinc-800">
+                <span className="truncate mr-2">{currentStepText}</span>
+                <div className="flex items-center gap-3 shrink-0">
+                  {isExporting && (
+                    <span>Velocidade: {currentFps.toFixed(1)} FPS</span>
+                  )}
+                  <span>Tempo: {elapsedSecs.toFixed(1)}s</span>
                 </div>
-              )}
+              </div>
 
-              {/* Mensagem de Erro */}
+              {/* Mensagem de Erro (se houver) */}
               {isError && (
                 <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
-                  <span>{exportProgress?.error || "Erro desconhecido na exportação."}</span>
+                  <span>{exportProgress?.error || "Erro desconhecido durante a exportação."}</span>
                 </div>
               )}
 
-              {/* Ações após conclusão */}
+              {/* Ações após conclusão com sucesso */}
               {isDone && (
-                <div className="pt-2 flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (exportProgress?.output_path) {
-                        invoke("open_video_file", { path: exportProgress.output_path });
-                      }
-                    }}
-                    className="flex-1 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Play className="h-3.5 w-3.5 fill-current" />
-                    Assistir Vídeo Exportado
-                  </button>
+                <div className="pt-2 flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (finalOutputPath) {
+                          invoke("open_video_file", { path: finalOutputPath });
+                        }
+                      }}
+                      className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/30 transition-colors cursor-pointer"
+                    >
+                      <Play className="h-4 w-4 fill-current" />
+                      Assistir Vídeo Exportado
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (finalOutputPath) {
+                          invoke("open_file_location", { path: finalOutputPath }).catch(() => {
+                            invoke("open_recordings_folder");
+                          });
+                        }
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      title="Abrir pasta onde o vídeo foi salvo"
+                    >
+                      <FolderOpen className="h-4 w-4 text-purple-400" />
+                      Abrir Pasta
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={onClose}
-                    className="py-2 px-4 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold transition-colors cursor-pointer"
+                    className="w-full py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 font-semibold transition-colors cursor-pointer text-center"
                   >
-                    Fechar
+                    Continuar no Editor
                   </button>
                 </div>
               )}
@@ -183,7 +250,7 @@ export function ExportModal({
                   <button
                     type="button"
                     onClick={onCancelExport}
-                    className="w-full py-2 rounded-lg bg-zinc-800 hover:bg-red-500/20 hover:text-red-300 text-zinc-300 font-semibold transition-colors cursor-pointer"
+                    className="w-full py-2 rounded-xl bg-zinc-800 hover:bg-red-500/20 hover:text-red-300 text-zinc-300 font-semibold transition-colors cursor-pointer"
                   >
                     Cancelar Exportação
                   </button>
@@ -251,7 +318,7 @@ export function ExportModal({
                 </div>
               </div>
 
-              {/* Enquadramento (Ajuste discreto conforme Item 9) */}
+              {/* Enquadramento */}
               <div>
                 <label className="block text-zinc-400 font-semibold mb-1.5">
                   Modo de Enquadramento:

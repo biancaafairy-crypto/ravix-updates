@@ -1371,6 +1371,120 @@ mod tests {
     }
 
     #[test]
+    fn test_v031_multi_audio_and_independent_cuts_workflow() {
+        use crate::models::AudioTrackExport;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let video1 = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-13_07-17-07.mp4";
+        let video2 = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-13_07-19-04.mp4";
+        let music1 = r"C:\Users\Santarosa\Music\Sons\BluezoneCorp - Alien Interface\Bluezone_BC0300_alien_interface_sci_fi_texture_003.wav";
+        let music2 = r"C:\Users\Santarosa\Music\Sons\BluezoneCorp - Alien Interface\Bluezone_BC0300_alien_interface_sci_fi_transition_004.wav";
+
+        if !std::path::Path::new(video1).exists() || !std::path::Path::new(video2).exists() {
+            eprintln!("Gravações reais não encontradas em Videos/RAVIX, pulando test_v031_multi_audio_and_independent_cuts_workflow");
+            return;
+        }
+
+        println!("\n=== TESTE V0.3.1: MÚLTIPLAS MÚSICAS, CORTES INDEPENDENTES E EXPORTAÇÃO MP4 ===");
+
+        let clip1 = TimelineClipExport {
+            id: "clip_v1".to_string(),
+            source_path: video1.to_string(),
+            in_point_secs: 0.0,
+            out_point_secs: 1.5,
+            volume: 1.0,
+            is_muted: false,
+        };
+        let clip2 = TimelineClipExport {
+            id: "clip_v2".to_string(),
+            source_path: video2.to_string(),
+            in_point_secs: 0.5,
+            out_point_secs: 2.0,
+            volume: 1.0,
+            is_muted: false,
+        };
+
+        // Simulação de corte independente de músicas:
+        // Trilha 1: Trecho de 0.0s a 1.5s com Fade In 0.3s
+        // Trilha 2: Trecho iniciando em 1.5s com duração de 1.5s e Fade Out 0.4s
+        let mut music_tracks = Vec::new();
+        if std::path::Path::new(music1).exists() {
+            music_tracks.push(AudioTrackExport {
+                id: "music_seg_1".to_string(),
+                source_path: music1.to_string(),
+                start_timeline_secs: 0.0,
+                in_point_secs: 0.0,
+                duration_secs: 1.5,
+                volume: 0.75,
+                is_muted: false,
+                fade_in_secs: 0.3,
+                fade_out_secs: 0.1,
+            });
+        }
+        if std::path::Path::new(music2).exists() {
+            music_tracks.push(AudioTrackExport {
+                id: "music_seg_2".to_string(),
+                source_path: music2.to_string(),
+                start_timeline_secs: 1.5,
+                in_point_secs: 0.0,
+                duration_secs: 1.5,
+                volume: 0.60,
+                is_muted: false,
+                fade_in_secs: 0.1,
+                fade_out_secs: 0.4,
+            });
+        }
+
+        println!("1. Configurados {} clipes de vídeo e {} trechos musicais independentes.", 2, music_tracks.len());
+
+        let out_dir = std::path::PathBuf::from(r"C:\Users\Santarosa\Videos\RAVIX\test_v031_staging");
+        let _ = std::fs::create_dir_all(&out_dir);
+        let out_file = out_dir.join("highlight_v031_test.mp4");
+        let _ = std::fs::remove_file(&out_file);
+
+        let export_cfg = TimelineExportConfig {
+            output_path: out_file.to_string_lossy().to_string(),
+            resolution_mode: "1080p".to_string(),
+            custom_width: None,
+            custom_height: None,
+            framing_mode: "fit".to_string(),
+            fps: 60,
+            bitrate_kbps: 20000,
+            clips: vec![clip1, clip2],
+            music_tracks,
+        };
+
+        let progress_count = AtomicUsize::new(0);
+        let export_res = export_timeline_sync(export_cfg, |p| {
+            progress_count.fetch_add(1, Ordering::SeqCst);
+            assert!(p.progress_pct >= 0.0 && p.progress_pct <= 100.0);
+            assert!(p.elapsed_secs >= 0.0);
+        });
+
+        assert!(export_res.is_ok(), "Exportação falhou: {:?}", export_res);
+        assert!(out_file.exists(), "MP4 não foi gerado no disco!");
+        assert!(progress_count.load(Ordering::SeqCst) > 0, "Nenhum evento de progresso recebido!");
+
+        let meta = get_video_metadata(&out_file.to_string_lossy()).expect("Falha lendo metadados");
+        println!("2. Arquivo MP4 gerado:");
+        println!("   - Resolução: {}x{}", meta.width, meta.height);
+        println!("   - Duração: {:.2}s", meta.duration_secs);
+        println!("   - Áudio: {} canais @ {} Hz", meta.audio_channels, meta.audio_sample_rate);
+        println!("   - Tamanho: {} bytes", meta.size_bytes);
+
+        assert_eq!(meta.width, 1920);
+        assert_eq!(meta.height, 1080);
+        assert_eq!(meta.audio_channels, 2);
+        assert!((meta.duration_secs - 3.0).abs() < 0.6);
+
+        // Limpeza
+        let _ = std::fs::remove_file(&out_file);
+        let _ = std::fs::remove_dir_all(&out_dir);
+
+        println!("=== TESTE V0.3.1 CONCLUÍDO COM SUCESSO! ===\n");
+    }
+
+    #[test]
     fn test_export_timeline_multi_clip_sequence() {
         let test_video = r"C:\Users\Santarosa\Videos\RAVIX\RAVIX_2026-11-12_13-52-38.mp4";
         let target_video = if std::path::Path::new(test_video).exists() {

@@ -52,11 +52,15 @@ export function VideoEditorView({
 
   const { videoClips, musicTracks } = timelineState;
 
-  // Estado da Agulha (Playhead) e Reprodução
+  // Estado da Agulha (Playhead) e Seleção
   const [playheadSecs, setPlayheadSecs] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [selectedTrackType, setSelectedTrackType] = useState<"video" | "music" | null>(null);
+
+  // Altura customizável da Timeline (entre 180px e 340px, padrão 240px)
+  const [timelineHeight, setTimelineHeight] = useState<number>(240);
+  const isResizingTimeline = useRef<boolean>(false);
 
   // Estado do Modal de Exportação
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
@@ -72,7 +76,7 @@ export function VideoEditorView({
   // Duração Total da Sequência de Vídeo na Timeline
   const totalDurationSecs = videoClips.reduce((acc, c) => acc + c.durationSecs, 0);
 
-  // Efeito de Reprodução da Timeline (Loop de Relógio de Alta Precisão)
+  // Efeito de Reprodução da Timeline (Loop com performance.now)
   const lastTimeRef = useRef<number>(performance.now());
   useEffect(() => {
     let animId: number;
@@ -107,14 +111,17 @@ export function VideoEditorView({
     }
   }, [initialVideoPath]);
 
-  // Listener para eventos de progresso de exportação
+  // Listener para eventos de progresso de exportação com suporte defensivo
   useEffect(() => {
     const unlisten = listen<any>("export-progress", (ev) => {
-      setExportProgress(ev.payload);
+      const payload = ev.payload;
+      if (!payload) return;
+      setExportProgress(payload);
+
       if (
-        ev.payload.state === "done" ||
-        ev.payload.state === "error" ||
-        ev.payload.state === "cancelled"
+        payload.state === "done" ||
+        payload.state === "error" ||
+        payload.state === "cancelled"
       ) {
         setIsExporting(false);
       }
@@ -127,7 +134,6 @@ export function VideoEditorView({
   // Atalhos de teclado no Editor (Espaço, S, I, O, Del, Ctrl+Z, Ctrl+Y)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignorar atalhos se o usuário estiver digitando em um input
       if (
         document.activeElement?.tagName === "INPUT" ||
         document.activeElement?.tagName === "TEXTAREA"
@@ -163,7 +169,7 @@ export function VideoEditorView({
     return () => window.removeEventListener("keydown", handleKeyDown);
   });
 
-  // Re-calcular posições sequenciais de início de cada clipe
+  // Re-calcular posições sequenciais de início de cada clipe de vídeo
   const recalculateStartTimes = (clips: TimelineClip[]): TimelineClip[] => {
     let currentStart = 0;
     return clips.map((c) => {
@@ -178,7 +184,7 @@ export function VideoEditorView({
     });
   };
 
-  // Importar Vídeos via Dialog
+  // Importar Múltiplos Vídeos via Dialog
   async function handleImportVideos() {
     try {
       const selected = await open({
@@ -197,34 +203,66 @@ export function VideoEditorView({
     }
   }
 
-  // Importar Música via Dialog
+  // Importar Várias Músicas Simultaneamente (Item 6)
   async function handleImportMusic() {
     try {
       const selected = await open({
-        multiple: false,
+        multiple: true,
         filters: [
           { name: "Áudios e Músicas", extensions: ["mp3", "wav", "aac", "m4a", "ogg", "flac"] },
         ],
       });
-      if (typeof selected === "string" && selected.length > 0) {
-        const meta = await invoke<any>("get_media_metadata", { path: selected });
-        const newAsset: MediaAsset = {
-          id: meta.id,
-          name: meta.name,
-          path: meta.path,
-          kind: "audio",
-          durationSecs: meta.durationSecs,
-          width: 0,
-          height: 0,
-          fps: 0,
-          audioChannels: meta.audioChannels,
-          audioSampleRate: meta.audioSampleRate,
-          sizeBytes: meta.sizeBytes,
-        };
-        setAssets((prev) => [...prev, newAsset]);
-        // Adicionar automaticamente à trilha de música
-        handleAddClipToTimeline(newAsset);
-        setEditorNotice({ type: "ok", text: `Música '${meta.name}' importada com sucesso.` });
+
+      const pathsToImport: string[] = [];
+      if (Array.isArray(selected)) {
+        pathsToImport.push(...selected);
+      } else if (typeof selected === "string" && (selected as string).length > 0) {
+        pathsToImport.push(selected);
+      }
+
+      if (pathsToImport.length === 0) return;
+
+      const newAssets: MediaAsset[] = [];
+      for (const filePath of pathsToImport) {
+        try {
+          const meta = await invoke<any>("get_media_metadata", { path: filePath });
+          const newAsset: MediaAsset = {
+            id: meta.id,
+            name: meta.name,
+            path: meta.path,
+            kind: "audio",
+            durationSecs: meta.durationSecs,
+            width: 0,
+            height: 0,
+            fps: 0,
+            audioChannels: meta.audioChannels,
+            audioSampleRate: meta.audioSampleRate,
+            sizeBytes: meta.sizeBytes,
+          };
+          newAssets.push(newAsset);
+        } catch (err) {
+          console.warn("Erro lendo metadados de áudio:", filePath, err);
+        }
+      }
+
+      if (newAssets.length > 0) {
+        setAssets((prev) => {
+          const existingPaths = new Set(prev.map((a) => a.path));
+          const unique = newAssets.filter((a) => !existingPaths.has(a.path));
+          return [...prev, ...unique];
+        });
+
+        // Adiciona a primeira música à timeline se a trilha de música estiver vazia
+        if (musicTracks.length === 0 && newAssets[0]) {
+          handleAddClipToTimeline(newAssets[0]);
+        }
+
+        setEditorNotice({
+          type: "ok",
+          text: `${newAssets.length} ${
+            newAssets.length === 1 ? "música importada" : "músicas importadas"
+          } com sucesso.`,
+        });
       }
     } catch (e) {
       setEditorNotice({ type: "err", text: `Erro ao importar música: ${e}` });
@@ -253,7 +291,7 @@ export function VideoEditorView({
         return [...prev, newAsset];
       });
 
-      // Se a timeline estiver vazia, adiciona automaticamente o primeiro vídeo
+      // Se a timeline de vídeo estiver vazia, adiciona automaticamente o primeiro vídeo
       if (videoClips.length === 0) {
         handleAddClipToTimeline(newAsset);
       }
@@ -286,18 +324,25 @@ export function VideoEditorView({
         text: `Gravação '${asset.name}' adicionada à timeline.`,
       });
     } else if (asset.kind === "audio") {
+      // Posiciona no playhead ou no final da última faixa de música
+      const lastMusicEnd = musicTracks.reduce(
+        (max, m) => Math.max(max, m.timelineStartSecs + m.durationSecs),
+        0
+      );
+      const startPos = musicTracks.length === 0 ? 0 : Math.max(playheadSecs, lastMusicEnd);
+
       const newTrack: TimelineAudioTrack = {
-        id: `music_${Date.now()}`,
+        id: `music_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         assetId: asset.id,
         sourcePath: asset.path,
         name: asset.name,
-        timelineStartSecs: 0,
+        timelineStartSecs: startPos,
         inPointSecs: 0,
         durationSecs: asset.durationSecs,
         volume: 0.8,
         isMuted: false,
-        fadeInSecs: 1.0,
-        fadeOutSecs: 2.0,
+        fadeInSecs: 0.5,
+        fadeOutSecs: 1.0,
       };
       pushState({ videoClips, musicTracks: [...musicTracks, newTrack] });
       setSelectedClipId(newTrack.id);
@@ -314,8 +359,54 @@ export function VideoEditorView({
     setAssets((prev) => prev.filter((a) => a.id !== assetId));
   }
 
-  // 1. DIVIDIR CLIPE NO CURSOR (Split)
+  // 1. DIVIDIR CLIPE NO CURSOR (Split) — Respeitando seleção de Vídeo ou Música (Item 5)
   function handleSplitAtPlayhead() {
+    // Se a música estiver selecionada, divide a música
+    if (selectedTrackType === "music" && selectedClipId) {
+      const trackIndex = musicTracks.findIndex((m) => m.id === selectedClipId);
+      if (trackIndex !== -1) {
+        const track = musicTracks[trackIndex];
+        const trackStart = track.timelineStartSecs;
+        const trackEnd = track.timelineStartSecs + track.durationSecs;
+
+        if (playheadSecs > trackStart + 0.1 && playheadSecs < trackEnd - 0.1) {
+          const relSecs = playheadSecs - trackStart;
+          const splitPoint = track.inPointSecs + relSecs;
+
+          const leftTrack: TimelineAudioTrack = {
+            ...track,
+            id: `music_${Date.now()}_left`,
+            durationSecs: relSecs,
+            fadeOutSecs: Math.min(track.fadeOutSecs, relSecs / 2),
+          };
+
+          const rightTrack: TimelineAudioTrack = {
+            ...track,
+            id: `music_${Date.now()}_right`,
+            timelineStartSecs: playheadSecs,
+            inPointSecs: splitPoint,
+            durationSecs: track.durationSecs - relSecs,
+            fadeInSecs: Math.min(track.fadeInSecs, (track.durationSecs - relSecs) / 2),
+          };
+
+          const nextMusic = [...musicTracks];
+          nextMusic.splice(trackIndex, 1, leftTrack, rightTrack);
+          pushState({ videoClips, musicTracks: nextMusic });
+          setSelectedClipId(rightTrack.id);
+          setSelectedTrackType("music");
+          setEditorNotice({ type: "ok", text: "Trecho de música dividido em duas partes." });
+          return;
+        } else {
+          setEditorNotice({
+            type: "err",
+            text: "Posicione a agulha sobre a música selecionada para dividir.",
+          });
+          return;
+        }
+      }
+    }
+
+    // Caso contrário (ou se clipe de vídeo estiver selecionado), divide clipe de vídeo
     const clipIndex = videoClips.findIndex(
       (c) =>
         playheadSecs > c.timelineStartSecs + 0.1 &&
@@ -325,7 +416,7 @@ export function VideoEditorView({
     if (clipIndex === -1) {
       setEditorNotice({
         type: "err",
-        text: "Posicione a agulha sobre um clipe de vídeo para dividir.",
+        text: "Posicione a agulha sobre um clipe válido para dividir.",
       });
       return;
     }
@@ -354,11 +445,34 @@ export function VideoEditorView({
     pushState({ videoClips: updated, musicTracks });
     setSelectedClipId(rightClip.id);
     setSelectedTrackType("video");
-    setEditorNotice({ type: "ok", text: "Clipe dividido com sucesso em 2 trechos." });
+    setEditorNotice({ type: "ok", text: "Clipe de vídeo dividido em 2 trechos." });
   }
 
-  // 2. CORTAR INÍCIO ATÉ A AGULHA (Trim In)
+  // 2. CORTAR INÍCIO ATÉ A AGULHA (Trim In) — Respeitando seleção (Item 5)
   function handleTrimIn() {
+    if (selectedTrackType === "music" && selectedClipId) {
+      const trackIndex = musicTracks.findIndex((m) => m.id === selectedClipId);
+      if (trackIndex !== -1) {
+        const track = musicTracks[trackIndex];
+        const relSecs = playheadSecs - track.timelineStartSecs;
+        if (relSecs > 0.1 && relSecs < track.durationSecs - 0.2) {
+          const newIn = track.inPointSecs + relSecs;
+          const newDur = track.durationSecs - relSecs;
+          const updatedTrack: TimelineAudioTrack = {
+            ...track,
+            timelineStartSecs: playheadSecs,
+            inPointSecs: newIn,
+            durationSecs: newDur,
+          };
+          const nextMusic = [...musicTracks];
+          nextMusic[trackIndex] = updatedTrack;
+          pushState({ videoClips, musicTracks: nextMusic });
+          setEditorNotice({ type: "ok", text: "Início da música cortado." });
+          return;
+        }
+      }
+    }
+
     const clipIndex = videoClips.findIndex((c) => c.id === selectedClipId);
     if (clipIndex === -1) return;
     const clip = videoClips[clipIndex];
@@ -376,11 +490,30 @@ export function VideoEditorView({
     nextClips[clipIndex] = updatedClip;
     const updated = recalculateStartTimes(nextClips);
     pushState({ videoClips: updated, musicTracks });
-    setEditorNotice({ type: "ok", text: "Início do clipe cortado." });
+    setEditorNotice({ type: "ok", text: "Início do vídeo cortado." });
   }
 
-  // 3. CORTAR FIM A PARTIR DA AGULHA (Trim Out)
+  // 3. CORTAR FIM A PARTIR DA AGULHA (Trim Out) — Respeitando seleção (Item 5)
   function handleTrimOut() {
+    if (selectedTrackType === "music" && selectedClipId) {
+      const trackIndex = musicTracks.findIndex((m) => m.id === selectedClipId);
+      if (trackIndex !== -1) {
+        const track = musicTracks[trackIndex];
+        const relSecs = playheadSecs - track.timelineStartSecs;
+        if (relSecs > 0.2 && relSecs < track.durationSecs) {
+          const updatedTrack: TimelineAudioTrack = {
+            ...track,
+            durationSecs: relSecs,
+          };
+          const nextMusic = [...musicTracks];
+          nextMusic[trackIndex] = updatedTrack;
+          pushState({ videoClips, musicTracks: nextMusic });
+          setEditorNotice({ type: "ok", text: "Final da música cortado." });
+          return;
+        }
+      }
+    }
+
     const clipIndex = videoClips.findIndex((c) => c.id === selectedClipId);
     if (clipIndex === -1) return;
     const clip = videoClips[clipIndex];
@@ -398,10 +531,10 @@ export function VideoEditorView({
     nextClips[clipIndex] = updatedClip;
     const updated = recalculateStartTimes(nextClips);
     pushState({ videoClips: updated, musicTracks });
-    setEditorNotice({ type: "ok", text: "Final do clipe cortado." });
+    setEditorNotice({ type: "ok", text: "Final do vídeo cortado." });
   }
 
-  // 4. EXCLUIR CLIPE SELECIONADO (Delete)
+  // 4. EXCLUIR ELEMENTO SELECIONADO (Delete)
   function handleDeleteSelected() {
     if (!selectedClipId) return;
 
@@ -499,10 +632,10 @@ export function VideoEditorView({
         const jsonStr = await invoke<string>("load_ravix_project", { path: selected });
         const proj: RavixProject = JSON.parse(jsonStr);
 
-        // Verificar existência dos arquivos no disco
         const allPaths = [
           ...proj.assets.map((a) => a.path),
           ...proj.videoClips.map((c) => c.sourcePath),
+          ...proj.musicTracks.map((m) => m.sourcePath),
         ];
         const existResults = await invoke<boolean[]>("check_media_files_exist", {
           paths: allPaths,
@@ -552,9 +685,9 @@ export function VideoEditorView({
       setIsExporting(true);
       setExportProgress({
         state: "exporting",
-        progress_pct: 0,
-        elapsed_secs: 0,
-        current_fps: 0,
+        progressPct: 0,
+        elapsedSecs: 0,
+        currentFps: 0,
       });
 
       const exportConfig: TimelineExportConfig = {
@@ -590,9 +723,9 @@ export function VideoEditorView({
       setExportProgress({
         state: "error",
         error: String(e),
-        progress_pct: 0,
-        elapsed_secs: 0,
-        current_fps: 0,
+        progressPct: 0,
+        elapsedSecs: 0,
+        currentFps: 0,
       });
     }
   }
@@ -608,20 +741,45 @@ export function VideoEditorView({
     "_"
   )}_export_1080p.mp4`;
 
+  // Redimensionamento de altura da Timeline
+  const handleSplitterMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizingTimeline.current = true;
+    const startY = e.clientY;
+    const initialHeight = timelineHeight;
+
+    const onMove = (ev: MouseEvent) => {
+      if (!isResizingTimeline.current) return;
+      const deltaY = startY - ev.clientY;
+      const nextH = Math.max(180, Math.min(380, initialHeight + deltaY));
+      setTimelineHeight(nextH);
+    };
+
+    const onUp = () => {
+      isResizingTimeline.current = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
-    <div className="flex-1 flex flex-col bg-[#07090D] overflow-hidden select-none">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#07090D] overflow-hidden select-none">
       {/* 1. Barra Superior de Projetos & Ações */}
       <div className="h-12 px-6 bg-[#0B0E14] border-b border-zinc-800 flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           <input
             type="text"
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
-            className="text-sm font-bold text-white bg-transparent hover:bg-zinc-800/60 focus:bg-zinc-900 border border-transparent focus:border-purple-500/50 rounded-lg px-2 py-1 outline-none transition-all"
+            className="text-sm font-bold text-white bg-transparent hover:bg-zinc-800/60 focus:bg-zinc-900 border border-transparent focus:border-purple-500/50 rounded-lg px-2 py-1 outline-none transition-all truncate max-w-[240px]"
             title="Clique para renomear o projeto"
           />
-          <span className="text-[11px] text-zinc-500 font-mono">
-            {videoClips.length} {videoClips.length === 1 ? "clipe" : "clipes"} (
+          <span className="text-[11px] text-zinc-500 font-mono shrink-0">
+            {videoClips.length} {videoClips.length === 1 ? "vídeo" : "vídeos"} |{" "}
+            {musicTracks.length} {musicTracks.length === 1 ? "música" : "músicas"} (
             {totalDurationSecs.toFixed(1)}s)
           </span>
         </div>
@@ -629,23 +787,23 @@ export function VideoEditorView({
         {/* Notificação Rápida */}
         {editorNotice && (
           <div
-            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all animate-fade-in ${
+            className={`px-3 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all truncate max-w-sm ${
               editorNotice.type === "ok"
                 ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
                 : "bg-red-500/15 text-red-300 border border-red-500/30"
             }`}
           >
             {editorNotice.type === "ok" ? (
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
             ) : (
-              <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+              <AlertTriangle className="h-3.5 w-3.5 text-red-400 shrink-0" />
             )}
-            <span>{editorNotice.text}</span>
+            <span className="truncate">{editorNotice.text}</span>
           </div>
         )}
 
         {/* Botões do Projeto */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={handleNewProject}
@@ -689,8 +847,8 @@ export function VideoEditorView({
         </div>
       </div>
 
-      {/* 2. Área Central Dividida: Biblioteca (Esquerda) + Pré-visualização (Centro/Direita) */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
+      {/* 2. Área Central Dividida: Biblioteca (Esquerda) + Prévia Estável (Centro) */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         <MediaLibrary
           assets={assets}
           onImportVideos={handleImportVideos}
@@ -716,6 +874,15 @@ export function VideoEditorView({
         />
       </div>
 
+      {/* Divisor Redimensionável sutil entre Área Central e Timeline */}
+      <div
+        onMouseDown={handleSplitterMouseDown}
+        className="h-1.5 bg-zinc-900 hover:bg-purple-500/50 cursor-row-resize transition-colors flex items-center justify-center shrink-0"
+        title="Arrastar para redimensionar a altura da timeline"
+      >
+        <div className="w-8 h-0.5 bg-zinc-700 rounded-full" />
+      </div>
+
       {/* 3. Barra de Ferramentas da Timeline */}
       <TimelineToolbar
         canUndo={canUndo}
@@ -734,8 +901,8 @@ export function VideoEditorView({
         onResetZoom={() => setZoom(35)}
       />
 
-      {/* 4. Timeline Visual Multi-Trilha */}
-      <div className="h-64 flex flex-col shrink-0">
+      {/* 4. Timeline Visual Multi-Trilha com Altura Controlada */}
+      <div style={{ height: `${timelineHeight}px` }} className="flex flex-col shrink-0 min-h-[180px]">
         <Timeline
           playheadSecs={playheadSecs}
           totalDurationSecs={totalDurationSecs}
