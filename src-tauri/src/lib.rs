@@ -195,6 +195,11 @@ fn open_video_file(path: String, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
 fn update_hotkey(hotkey: String, app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let trimmed = hotkey.trim().to_string();
     if trimmed.is_empty() {
@@ -381,6 +386,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            get_app_version,
             get_system_capabilities,
             get_config,
             save_user_config,

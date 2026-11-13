@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -131,6 +132,23 @@ export default function App() {
   const [updateObj, setUpdateObj] = useState<Update | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
   const [updateProgress, setUpdateProgress] = useState<{ downloaded: number; total: number; percent: number } | null>(null);
+  const [appVersion, setAppVersion] = useState<string>("");
+
+  useEffect(() => {
+    getVersion()
+      .then((ver) => {
+        setAppVersion(ver);
+      })
+      .catch(async (err) => {
+        console.warn("Falha ao obter versão via getVersion(), tentando comando get_app_version:", err);
+        try {
+          const ver = await invoke<string>("get_app_version");
+          setAppVersion(ver);
+        } catch (e2) {
+          console.error("Falha ao obter versão do aplicativo:", e2);
+        }
+      });
+  }, []);
 
   const hasHotkeyConflict = hotkeyInput.trim().toUpperCase() === replayHotkeyInput.trim().toUpperCase();
 
@@ -483,7 +501,7 @@ export default function App() {
   if (!config || !caps || !status) {
     return (
       <div className="flex h-screen items-center justify-center bg-[#090B0E] text-zinc-400">
-        Inicializando motor RAVIX V0.2.1...
+        Inicializando motor RAVIX{appVersion ? ` V${appVersion}` : ""}...
       </div>
     );
   }
@@ -516,7 +534,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="text-base font-bold tracking-wider text-white">RAVIX</span>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                  V0.2.1
+                  {appVersion ? `V${appVersion}` : "..."}
                 </span>
                 {stateBadge && (
                   <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${stateBadge.cls}`}>
@@ -1626,7 +1644,7 @@ export default function App() {
                 <Settings className="h-5 w-5 text-purple-400" />
                 <h2 className="text-base font-bold text-white">Configurações do RAVIX</h2>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                  V0.2.1
+                  {appVersion ? `V${appVersion}` : "..."}
                 </span>
               </div>
               <button
@@ -1924,7 +1942,7 @@ export default function App() {
                       <div className="flex items-center justify-between">
                         <div>
                           <div className="text-xs font-semibold text-white">Versão Instalada</div>
-                          <div className="text-[11px] text-zinc-400">RAVIX Desktop v0.2.1 (x64 Windows)</div>
+                          <div className="text-[11px] text-zinc-400">RAVIX Desktop v{appVersion || "..."} (x64 Windows)</div>
                         </div>
                         <button
                           type="button"
@@ -1967,7 +1985,7 @@ export default function App() {
                       <div className="p-3 rounded-xl bg-zinc-800/80 border border-zinc-700 flex flex-col gap-1.5">
                         <div className="flex items-center gap-2 text-xs font-semibold text-zinc-200">
                           <AlertTriangle className="h-4 w-4 text-amber-400" />
-                          <span>Atualização não pôde ser concluída.</span>
+                          <span>Não foi possível verificar atualizações. Tente novamente.</span>
                         </div>
                         <p className="text-[11px] text-zinc-400">
                           {updateError || "Servidor remoto indisponível ou sem conexão ativa com a internet."}
@@ -2075,7 +2093,7 @@ export default function App() {
                       </div>
 
                       <div className="pt-2 border-t border-zinc-800/80 text-xs text-zinc-300 space-y-1.5 font-mono">
-                        <div>Versão: <span className="text-white font-bold">0.2.1-beta</span></div>
+                        <div>Versão: <span className="text-white font-bold">{appVersion ? `${appVersion}-beta` : "..."}</span></div>
                         <div>Plataforma: <span className="text-white">Windows 10 / 11 (x64)</span></div>
                         <div>Motor Gráfico: <span className="text-purple-300">Direct3D11 Video Processor</span></div>
                         <div>Captura: <span className="text-purple-300">Windows Graphics Capture (WGC)</span></div>

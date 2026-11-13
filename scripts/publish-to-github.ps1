@@ -3,7 +3,7 @@
     [string]$Token = $env:GITHUB_TOKEN,
 
     [Parameter(Mandatory=$false)]
-    [string]$Version = "0.2.1",
+    [string]$Version = "0.2.3",
 
     [Parameter(Mandatory=$false)]
     [string]$Repo = "biancaafairy-crypto/ravix-updates"
@@ -11,7 +11,7 @@
 
 if (-not $Token) {
     Write-Host "ERRO: Token do GitHub não fornecido." -ForegroundColor Red
-    Write-Host "Uso: .\scripts\publish-to-github.ps1 -Token 'ghp_xxx' [-Version '0.2.1']" -ForegroundColor Yellow
+    Write-Host "Uso: .\scripts\publish-to-github.ps1 -Token 'ghp_xxx' [-Version '0.2.3']" -ForegroundColor Yellow
     Write-Host "Ou defina a variável de ambiente `$env:GITHUB_TOKEN = 'ghp_xxx'`" -ForegroundColor Yellow
     exit 1
 }
@@ -48,7 +48,7 @@ try {
 
 $tagName = "v$Version"
 $releaseTitle = "RAVIX V$Version"
-$releaseBody = "RAVIX V$Version — Atualizador integrado, perfis esticados e enquadramento dinâmico."
+$releaseBody = "Correção da identificação de versão e melhorias de confiabilidade do atualizador integrado."
 
 Write-Host "==> Criando Release $releaseTitle ($tagName)..." -ForegroundColor Cyan
 $releasePayload = @{
