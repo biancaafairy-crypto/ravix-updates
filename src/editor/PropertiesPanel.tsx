@@ -23,6 +23,7 @@ interface PropertiesPanelProps {
   onUpdateClip: (clipId: string, updates: Partial<TimelineClip>) => void;
   onUpdateMusic: (trackId: string, updates: Partial<TimelineAudioTrack>) => void;
   onResetClipTransform: (clipId: string) => void;
+  onResetClipCrop: (clipId: string) => void;
 }
 
 function formatTime(secs: number): string {
@@ -43,8 +44,10 @@ export function PropertiesPanel({
   onUpdateClip,
   onUpdateMusic,
   onResetClipTransform,
+  onResetClipCrop,
 }: PropertiesPanelProps) {
   const [activeSubTab, setActiveSubTab] = useState<"visual" | "audio">("visual");
+  const [linkScaleAspect, setLinkScaleAspect] = useState<boolean>(true);
 
   // Se o painel estiver recolhido, exibe apenas uma barra lateral discreta com botão para expandir
   if (!isOpen) {
@@ -181,27 +184,77 @@ export function PropertiesPanel({
                   </select>
                 </div>
 
-                {/* Escala e Posição (Manipulação Visual) */}
+                {/* Escala e Posição (Manipulação Visual Direcional) */}
                 <div className="p-3 rounded-xl bg-[#121622] border border-zinc-800/80 space-y-3">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-semibold text-zinc-300">
-                      Escala da Imagem
+                      Transformação Visual (8 Alças)
                     </span>
-                    <span className="font-mono text-purple-300 font-bold text-xs">
-                      {Math.round((selectedClip.scale ?? 1.0) * 100)}%
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setLinkScaleAspect(!linkScaleAspect)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors cursor-pointer border ${
+                        linkScaleAspect
+                          ? "bg-purple-600/30 text-purple-300 border-purple-500/50"
+                          : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                      }`}
+                      title={linkScaleAspect ? "Proporção vinculada (X e Y juntos)" : "Escala livre (X e Y independentes)"}
+                    >
+                      {linkScaleAspect ? "Proporção Fixa" : "Escala Livre"}
+                    </button>
                   </div>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2.0"
-                    step="0.05"
-                    value={selectedClip.scale ?? 1.0}
-                    onChange={(e) =>
-                      onUpdateClip(selectedClip.id, { scale: parseFloat(e.target.value) })
-                    }
-                    className="w-full h-1.5 accent-purple-500 bg-zinc-700 rounded-lg cursor-pointer"
-                  />
+
+                  {/* Escala X (Largura) */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                      <span>Largura (Escala X):</span>
+                      <span className="font-mono text-purple-300 font-bold">
+                        {Math.round((selectedClip.scaleX ?? selectedClip.scale ?? 1.0) * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="3.0"
+                      step="0.05"
+                      value={selectedClip.scaleX ?? selectedClip.scale ?? 1.0}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (linkScaleAspect) {
+                          onUpdateClip(selectedClip.id, { scaleX: val, scaleY: val, scale: val });
+                        } else {
+                          onUpdateClip(selectedClip.id, { scaleX: val });
+                        }
+                      }}
+                      className="w-full h-1.5 accent-purple-500 bg-zinc-700 rounded-lg cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Escala Y (Altura) */}
+                  <div>
+                    <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                      <span>Altura (Escala Y):</span>
+                      <span className="font-mono text-purple-300 font-bold">
+                        {Math.round((selectedClip.scaleY ?? selectedClip.scale ?? 1.0) * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.2"
+                      max="3.0"
+                      step="0.05"
+                      value={selectedClip.scaleY ?? selectedClip.scale ?? 1.0}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        if (linkScaleAspect) {
+                          onUpdateClip(selectedClip.id, { scaleX: val, scaleY: val, scale: val });
+                        } else {
+                          onUpdateClip(selectedClip.id, { scaleY: val });
+                        }
+                      }}
+                      className="w-full h-1.5 accent-purple-500 bg-zinc-700 rounded-lg cursor-pointer"
+                    />
+                  </div>
 
                   {/* Offset X e Y */}
                   <div className="grid grid-cols-2 gap-2 pt-1">
@@ -249,7 +302,7 @@ export function PropertiesPanel({
                     </div>
                   </div>
 
-                  {/* Botão Restaurar Padrão */}
+                  {/* Botão Restaurar Padrão de Transformação */}
                   <button
                     type="button"
                     onClick={() => onResetClipTransform(selectedClip.id)}
@@ -257,6 +310,127 @@ export function PropertiesPanel({
                   >
                     <RotateCcw className="h-3 w-3" />
                     Restaurar Padrão (100%, 0, 0)
+                  </button>
+                </div>
+
+                {/* Recorte Manual de Bordas (Crop Tool) — ETAPA 5 */}
+                <div className="p-3 rounded-xl bg-[#121622] border border-zinc-800/80 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-zinc-300">
+                      Recorte Manual de Bordas (Crop)
+                    </span>
+                    <span className="text-[10px] font-mono text-emerald-300">
+                      {(selectedClip.cropLeft || selectedClip.cropRight || selectedClip.cropTop || selectedClip.cropBottom)
+                        ? "Personalizado"
+                        : "0%"}
+                    </span>
+                  </div>
+
+                  <p className="text-[10px] text-zinc-400 leading-snug bg-black/30 p-2 rounded-lg border border-zinc-800">
+                    <strong className="text-zinc-300">Barras pretas:</strong> Se o vídeo original veio gravado com faixas embutidas (ex: FiveM 4:3 esticado sem preenchimento completo), use os cortes abaixo para eliminá-las da prévia e do MP4 final.
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {/* Esquerda */}
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                        <span>Esquerda:</span>
+                        <span className="font-mono text-emerald-300">
+                          {Math.round(selectedClip.cropLeft ?? 0)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="49"
+                        step="1"
+                        value={selectedClip.cropLeft ?? 0}
+                        onChange={(e) =>
+                          onUpdateClip(selectedClip.id, {
+                            cropLeft: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Direita */}
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                        <span>Direita:</span>
+                        <span className="font-mono text-emerald-300">
+                          {Math.round(selectedClip.cropRight ?? 0)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="49"
+                        step="1"
+                        value={selectedClip.cropRight ?? 0}
+                        onChange={(e) =>
+                          onUpdateClip(selectedClip.id, {
+                            cropRight: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Topo */}
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                        <span>Topo:</span>
+                        <span className="font-mono text-emerald-300">
+                          {Math.round(selectedClip.cropTop ?? 0)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="49"
+                        step="1"
+                        value={selectedClip.cropTop ?? 0}
+                        onChange={(e) =>
+                          onUpdateClip(selectedClip.id, {
+                            cropTop: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
+                      />
+                    </div>
+
+                    {/* Base */}
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-zinc-400 mb-1">
+                        <span>Base:</span>
+                        <span className="font-mono text-emerald-300">
+                          {Math.round(selectedClip.cropBottom ?? 0)}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="49"
+                        step="1"
+                        value={selectedClip.cropBottom ?? 0}
+                        onChange={(e) =>
+                          onUpdateClip(selectedClip.id, {
+                            cropBottom: parseFloat(e.target.value),
+                          })
+                        }
+                        className="w-full h-1.5 accent-emerald-500 bg-zinc-700 rounded-lg cursor-pointer"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => onResetClipCrop(selectedClip.id)}
+                    className="w-full py-1.5 px-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    Restaurar Recorte (0%, 0%, 0%, 0%)
                   </button>
                 </div>
 

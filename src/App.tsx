@@ -90,7 +90,6 @@ export default function App() {
   const [config, setConfig] = useState<RecordingConfig | null>(null);
   const [status, setStatus] = useState<RecorderStatus | null>(null);
   const [files, setFiles] = useState<RecordedFileInfo[]>([]);
-  const [hotkeyInput, setHotkeyInput] = useState("F9");
   const [customWInput, setCustomWInput] = useState("");
   const [customHInput, setCustomHInput] = useState("");
   const [uiNotice, setUiNotice] = useState<{ type: "err" | "ok"; text: string } | null>(null);
@@ -106,7 +105,6 @@ export default function App() {
   // Estado das Configurações e Atualizador
   const [showSettings, setShowSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"geral" | "atalhos" | "gravacoes" | "captura" | "atualizacoes" | "sobre">("geral");
-  const [replayHotkeyInput, setReplayHotkeyInput] = useState("F8");
   const [recordingTarget, setRecordingTarget] = useState<"main" | "replay" | null>(null);
   const [updateStatus, setUpdateStatus] = useState<
     "idle" | "checking" | "available" | "up-to-date" | "downloading" | "downloaded" | "error"
@@ -184,7 +182,6 @@ export default function App() {
       if (recordingTarget === "main") {
         invoke("update_hotkey", { hotkey: combo })
           .then(() => {
-            setHotkeyInput(combo);
             if (config) setConfig({ ...config, hotkey: combo });
             setRecordingTarget(null);
             setUiNotice({ type: "ok", text: `Atalho global atualizado para '${combo}'.` });
@@ -193,7 +190,6 @@ export default function App() {
             setUiNotice({ type: "err", text: String(err) });
           });
       } else if (recordingTarget === "replay") {
-        setReplayHotkeyInput(combo);
         updateConfig({ replayHotkey: combo });
         setRecordingTarget(null);
         invoke("resume_hotkey").catch(() => {});
@@ -223,7 +219,9 @@ export default function App() {
       });
   }, []);
 
-  const hasHotkeyConflict = hotkeyInput.trim().toUpperCase() === replayHotkeyInput.trim().toUpperCase();
+  const hasHotkeyConflict =
+    (config?.hotkey || "").trim().toUpperCase() ===
+    (config?.replayHotkey || "").trim().toUpperCase();
 
   async function refreshAll() {
     setRefreshing(true);
@@ -236,8 +234,6 @@ export default function App() {
       ]);
       setCaps(c);
       setConfig(cfg);
-      setHotkeyInput(cfg.hotkey || "F9");
-      setReplayHotkeyInput(cfg.replayHotkey || "F8");
       setStatus(st);
       setFiles(list);
       if (cfg.customWidth) setCustomWInput(String(cfg.customWidth));
@@ -331,17 +327,6 @@ export default function App() {
     });
     if (typeof selected === "string" && selected.length > 0) {
       await updateConfig({ replayFolder: selected });
-    }
-  }
-
-  async function handleApplyHotkey() {
-    setUiNotice(null);
-    try {
-      await invoke("update_hotkey", { hotkey: hotkeyInput });
-      if (config) setConfig({ ...config, hotkey: hotkeyInput.trim() });
-      setUiNotice({ type: "ok", text: `Atalho global '${hotkeyInput.trim()}' atualizado.` });
-    } catch (e) {
-      setUiNotice({ type: "err", text: String(e) });
     }
   }
 
@@ -635,22 +620,13 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
-                  if (recordingTarget === "main") {
-                    setRecordingTarget(null);
-                    invoke("resume_hotkey").catch(() => {});
-                  } else {
-                    setRecordingTarget("main");
-                    invoke("suspend_hotkey").catch(() => {});
-                  }
+                  setSettingsTab("atalhos");
+                  setShowSettings(true);
                 }}
-                className={`font-semibold px-2 py-0.5 rounded text-xs transition-all cursor-pointer ${
-                  recordingTarget === "main"
-                    ? "bg-purple-600 text-white animate-pulse ring-2 ring-purple-400"
-                    : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                }`}
-                title="Clique para alterar o atalho global"
+                className="font-semibold px-2 py-0.5 rounded text-xs bg-zinc-800 hover:bg-zinc-700 text-purple-300 border border-zinc-700/80 hover:border-purple-500/50 transition-all cursor-pointer font-mono"
+                title="Clique para configurar atalhos no menu de Configurações"
               >
-                {recordingTarget === "main" ? "Pressione a tecla..." : config.hotkey}
+                {config.hotkey || "F9"}
               </button>
             </div>
           </div>
@@ -1051,25 +1027,23 @@ export default function App() {
                 <div className="sm:col-span-2 pt-2 border-t border-zinc-800/70">
                   <div className="flex items-center justify-between">
                     <div>
-                      <label className="block text-xs text-zinc-400 font-medium">Atalho Global (Gravar / Parar)</label>
-                      <span className="text-[11px] text-zinc-500">Pressione a tecla para iniciar ou encerrar a captura</span>
+                      <label className="block text-xs text-zinc-300 font-medium">Atalho de Gravação</label>
+                      <span className="text-[11px] text-zinc-500">Inicia ou encerra a captura instantânea de gameplay</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        disabled={isRecording}
-                        value={hotkeyInput}
-                        onChange={(e) => setHotkeyInput(e.target.value)}
-                        placeholder="F9"
-                        className="w-24 text-center rounded border border-zinc-700/80 bg-[#090B0E] px-2.5 py-1 text-xs text-zinc-100 font-mono font-bold uppercase disabled:opacity-60"
-                      />
+                      <span className="px-3 py-1 rounded bg-[#090B0E] border border-zinc-700/80 text-xs font-mono font-bold text-purple-300">
+                        {config.hotkey || "F9"}
+                      </span>
                       <button
                         type="button"
-                        disabled={isRecording || hotkeyInput.trim() === config.hotkey}
-                        onClick={handleApplyHotkey}
-                        className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 disabled:opacity-40 transition-colors cursor-pointer"
+                        onClick={() => {
+                          setSettingsTab("atalhos");
+                          setShowSettings(true);
+                        }}
+                        className="px-3 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors cursor-pointer"
+                        title="Alterar atalho no menu de Configurações"
                       >
-                        Salvar
+                        Alterar
                       </button>
                     </div>
                   </div>

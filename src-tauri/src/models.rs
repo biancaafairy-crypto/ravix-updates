@@ -268,6 +268,15 @@ pub struct MediaAssetInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExportDestinationCheck {
+    pub is_valid: bool,
+    pub exists: bool,
+    pub can_write: bool,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TimelineClipExport {
     pub id: String,
     pub source_path: String,
@@ -278,9 +287,43 @@ pub struct TimelineClipExport {
     #[serde(default)]
     pub scale: Option<f32>,
     #[serde(default)]
+    pub scale_x: Option<f32>,
+    #[serde(default)]
+    pub scale_y: Option<f32>,
+    #[serde(default)]
     pub position_x: Option<f32>,
     #[serde(default)]
     pub position_y: Option<f32>,
+    #[serde(default)]
+    pub crop_left: Option<f32>,
+    #[serde(default)]
+    pub crop_right: Option<f32>,
+    #[serde(default)]
+    pub crop_top: Option<f32>,
+    #[serde(default)]
+    pub crop_bottom: Option<f32>,
+}
+
+impl Default for TimelineClipExport {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            source_path: String::new(),
+            in_point_secs: 0.0,
+            out_point_secs: 0.0,
+            volume: 1.0,
+            is_muted: false,
+            scale: None,
+            scale_x: None,
+            scale_y: None,
+            position_x: None,
+            position_y: None,
+            crop_left: None,
+            crop_right: None,
+            crop_top: None,
+            crop_bottom: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,9 +370,46 @@ pub struct TimelineClipData {
     #[serde(default)]
     pub scale: Option<f32>,
     #[serde(default)]
+    pub scale_x: Option<f32>,
+    #[serde(default)]
+    pub scale_y: Option<f32>,
+    #[serde(default)]
     pub position_x: Option<f32>,
     #[serde(default)]
     pub position_y: Option<f32>,
+    #[serde(default)]
+    pub crop_left: Option<f32>,
+    #[serde(default)]
+    pub crop_right: Option<f32>,
+    #[serde(default)]
+    pub crop_top: Option<f32>,
+    #[serde(default)]
+    pub crop_bottom: Option<f32>,
+}
+
+impl Default for TimelineClipData {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            asset_id: String::new(),
+            source_path: String::new(),
+            name: String::new(),
+            timeline_start_secs: 0.0,
+            in_point_secs: 0.0,
+            out_point_secs: 0.0,
+            volume: 1.0,
+            is_muted: false,
+            scale: None,
+            scale_x: None,
+            scale_y: None,
+            position_x: None,
+            position_y: None,
+            crop_left: None,
+            crop_right: None,
+            crop_top: None,
+            crop_bottom: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

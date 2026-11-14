@@ -261,21 +261,47 @@ impl GpuBgraToNv12 {
             .VideoProcessorSetOutputTargetRect(&self.processor, true, Some(&target_rect));
     }
 
-    pub unsafe fn configure_rects_with_transform(&mut self, scale: f32, pos_x: f32, pos_y: f32) {
-        let (src_rect, mut dst_rect) = crate::geometry::compute_transform_rects(
+    pub unsafe fn configure_rects_with_transform(
+        &mut self,
+        scale_x: f32,
+        scale_y: f32,
+        pos_x: f32,
+        pos_y: f32,
+        crop_left: f32,
+        crop_right: f32,
+        crop_top: f32,
+        crop_bottom: f32,
+    ) {
+        let (mut src_rect, mut dst_rect) = crate::geometry::compute_transform_rects(
             self.src_w,
             self.src_h,
             self.dst_w,
             self.dst_h,
             &self.framing_mode,
         );
-        let s = if scale > 0.01 { scale } else { 1.0 };
+
+        // Aplicação de Recorte Manual (Crop) nos limites de pixels da imagem fonte
+        let sw = self.src_w as f32;
+        let sh = self.src_h as f32;
+        let cl = (sw * (crop_left.clamp(0.0, 49.0) / 100.0)).round() as i32;
+        let cr = (sw * (crop_right.clamp(0.0, 49.0) / 100.0)).round() as i32;
+        let ct = (sh * (crop_top.clamp(0.0, 49.0) / 100.0)).round() as i32;
+        let cb = (sh * (crop_bottom.clamp(0.0, 49.0) / 100.0)).round() as i32;
+
+        src_rect.left = (src_rect.left + cl).min(src_rect.right - 2);
+        src_rect.right = (src_rect.right - cr).max(src_rect.left + 2);
+        src_rect.top = (src_rect.top + ct).min(src_rect.bottom - 2);
+        src_rect.bottom = (src_rect.bottom - cb).max(src_rect.top + 2);
+
+        // Escalas direcionais e deslocamento
+        let sx = if scale_x > 0.01 { scale_x } else { 1.0 };
+        let sy = if scale_y > 0.01 { scale_y } else { 1.0 };
         let orig_w = (dst_rect.right - dst_rect.left) as f32;
         let orig_h = (dst_rect.bottom - dst_rect.top) as f32;
         let cx = (dst_rect.left + dst_rect.right) as f32 / 2.0 + (pos_x / 100.0) * (self.dst_w as f32);
         let cy = (dst_rect.top + dst_rect.bottom) as f32 / 2.0 + (pos_y / 100.0) * (self.dst_h as f32);
-        let new_w = orig_w * s;
-        let new_h = orig_h * s;
+        let new_w = orig_w * sx;
+        let new_h = orig_h * sy;
 
         dst_rect.left = (cx - new_w / 2.0).round() as i32;
         dst_rect.top = (cy - new_h / 2.0).round() as i32;

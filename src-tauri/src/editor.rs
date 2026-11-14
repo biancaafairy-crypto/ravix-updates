@@ -2,7 +2,8 @@ use crate::d3d11::{D3D11Context, EncBgraUploader, GpuBgraToNv12, SharedBgraSlot}
 use crate::geometry::compute_target_dimensions;
 use crate::logger;
 use crate::models::{
-    ExportConfig, ExportProgress, MediaAssetInfo, TimelineExportConfig, VideoMetadata,
+    ExportConfig, ExportDestinationCheck, ExportProgress, MediaAssetInfo, TimelineExportConfig,
+    VideoMetadata,
 };
 use crate::sink::MediaSinkWriter;
 use std::path::Path;
@@ -36,6 +37,105 @@ pub fn cancel_current_export() {
     if let Some(flag) = EXPORT_CANCEL_FLAG.read().as_ref() {
         flag.store(true, Ordering::SeqCst);
     }
+}
+
+pub fn validate_export_destination(path_str: &str) -> Result<ExportDestinationCheck, String> {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() {
+        return Ok(ExportDestinationCheck {
+            is_valid: false,
+            exists: false,
+            can_write: false,
+            message: Some("Caminho de saída não informado.".to_string()),
+        });
+    }
+
+    let p = Path::new(trimmed);
+    if p.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()) != Some("mp4".to_string()) {
+        return Ok(ExportDestinationCheck {
+            is_valid: false,
+            exists: false,
+            can_write: false,
+            message: Some("O arquivo de destino deve ter a extensão .mp4".to_string()),
+        });
+    }
+
+    let parent = match p.parent() {
+        Some(par) if !par.as_os_str().is_empty() => par,
+        _ => Path::new("."),
+    };
+
+    // Criar diretório pai caso não exista
+    if !parent.exists() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return Ok(ExportDestinationCheck {
+                is_valid: false,
+                exists: false,
+                can_write: false,
+                message: Some(format!(
+                    "Não foi possível criar a pasta '{}': {e}. Escolha uma pasta válida de usuário (ex: Vídeos ou Documentos).",
+                    parent.display()
+                )),
+            });
+        }
+    }
+
+    // Testar gravação na pasta de destino através de arquivo probe
+    let probe_name = format!(
+        ".ravix_probe_{}.tmp",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let probe_path = parent.join(probe_name);
+    match std::fs::write(&probe_path, b"probe_ravix_write") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe_path);
+        }
+        Err(e) => {
+            return Ok(ExportDestinationCheck {
+                is_valid: false,
+                exists: false,
+                can_write: false,
+                message: Some(format!(
+                    "Sem permissão de gravação na pasta '{}' ({e}). Não é permitido salvar diretamente na raiz de sistema como C:\\Users. Escolha sua pasta de Vídeos ou Documentos.",
+                    parent.display()
+                )),
+            });
+        }
+    }
+
+    // Verificar se o arquivo já existe e se está bloqueado por outro processo
+    let exists = p.exists();
+    if exists {
+        match std::fs::OpenOptions::new().write(true).open(p) {
+            Ok(_) => {
+                // Arquivo existe e pode ser aberto para gravação
+            }
+            Err(e) => {
+                return Ok(ExportDestinationCheck {
+                    is_valid: false,
+                    exists: true,
+                    can_write: false,
+                    message: Some(format!(
+                        "O arquivo já existe e está bloqueado ou em reprodução por outro programa ({e}). Feche o reprodutor de vídeo ou escolha outro nome de arquivo."
+                    )),
+                });
+            }
+        }
+    }
+
+    Ok(ExportDestinationCheck {
+        is_valid: true,
+        exists,
+        can_write: true,
+        message: if exists {
+            Some("O arquivo já existe e será substituído após a conclusão da exportação.".to_string())
+        } else {
+            None
+        },
+    })
 }
 
 pub fn get_video_metadata(path_str: &str) -> Result<VideoMetadata, String> {
@@ -291,14 +391,24 @@ where
 
     let (nv12_tex, nv12_view) = converter.create_nv12_texture()?;
 
+    let check = validate_export_destination(&config.output_path)?;
+    if !check.is_valid {
+        return Err(check.message.unwrap_or_else(|| "Caminho de saída inválido.".to_string()));
+    }
+
     // Criar arquivo de saída destino
     let output_path = Path::new(&config.output_path);
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
+    let part_path = output_path.with_extension("mp4.part");
+    if part_path.exists() {
+        let _ = std::fs::remove_file(&part_path);
+    }
+
     let sink = MediaSinkWriter::create(
-        output_path,
+        &part_path,
         &enc_d3d.mf_dxgi_manager,
         out_w,
         out_h,
@@ -337,7 +447,11 @@ where
     while !video_eof || (!audio_eof && has_audio) {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = sink.finalize();
-            let _ = std::fs::remove_file(output_path);
+            let _ = std::fs::remove_file(&part_path);
+            {
+                let mut guard = EXPORT_CANCEL_FLAG.write();
+                *guard = None;
+            }
             on_progress(ExportProgress {
                 state: "cancelled".to_string(),
                 progress_pct: 0.0,
@@ -440,6 +554,20 @@ where
     }
 
     sink.finalize()?;
+
+    // Substituição atômica segura do arquivo destino
+    if output_path.exists() {
+        let _ = std::fs::remove_file(output_path);
+    }
+    if let Err(e) = std::fs::rename(&part_path, output_path) {
+        let _ = std::fs::remove_file(&part_path);
+        return Err(format!("Falha ao mover arquivo exportado final para {}: {e}", output_path.display()));
+    }
+
+    {
+        let mut guard = EXPORT_CANCEL_FLAG.write();
+        *guard = None;
+    }
 
     let final_elapsed = t_start.elapsed().as_secs_f64();
     let avg_fps = if final_elapsed > 0.05 { (frames_written as f64) / final_elapsed } else { 0.0 };
@@ -733,13 +861,24 @@ where
 
     let enc_d3d = D3D11Context::new().map_err(|e| format!("Falha D3D11 encoder: {e}"))?;
 
+    let check = validate_export_destination(&config.output_path)?;
+    if !check.is_valid {
+        return Err(check.message.unwrap_or_else(|| "Caminho de saída inválido para exportação.".to_string()));
+    }
+
     let output_path = Path::new(&config.output_path);
     if let Some(parent) = output_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
 
+    // Gravação atômica segura em arquivo adjacente .part
+    let part_path = output_path.with_extension("mp4.part");
+    if part_path.exists() {
+        let _ = std::fs::remove_file(&part_path);
+    }
+
     let sink = MediaSinkWriter::create(
-        output_path,
+        &part_path,
         &enc_d3d.mf_dxgi_manager,
         out_w,
         out_h,
@@ -758,7 +897,11 @@ where
     for (clip_idx, clip) in config.clips.iter().enumerate() {
         if cancel_flag.load(Ordering::SeqCst) {
             let _ = sink.finalize();
-            let _ = std::fs::remove_file(output_path);
+            let _ = std::fs::remove_file(&part_path);
+            {
+                let mut guard = EXPORT_CANCEL_FLAG.write();
+                *guard = None;
+            }
             on_progress(ExportProgress {
                 state: "cancelled".to_string(),
                 progress_pct: 0.0,
@@ -799,13 +942,26 @@ where
             &config.framing_mode,
         )?;
 
-        let clip_scale = clip.scale.unwrap_or(1.0);
+        let clip_scale_x = clip.scale_x.or(clip.scale).unwrap_or(1.0);
+        let clip_scale_y = clip.scale_y.or(clip.scale).unwrap_or(1.0);
         let clip_px = clip.position_x.unwrap_or(0.0);
         let clip_py = clip.position_y.unwrap_or(0.0);
-        if (clip_scale - 1.0).abs() > 0.001 || clip_px.abs() > 0.001 || clip_py.abs() > 0.001 {
-            unsafe {
-                converter.configure_rects_with_transform(clip_scale, clip_px, clip_py);
-            }
+        let crop_l = clip.crop_left.unwrap_or(0.0);
+        let crop_r = clip.crop_right.unwrap_or(0.0);
+        let crop_t = clip.crop_top.unwrap_or(0.0);
+        let crop_b = clip.crop_bottom.unwrap_or(0.0);
+
+        unsafe {
+            converter.configure_rects_with_transform(
+                clip_scale_x,
+                clip_scale_y,
+                clip_px,
+                clip_py,
+                crop_l,
+                crop_r,
+                crop_t,
+                crop_b,
+            );
         }
 
         let (nv12_tex, nv12_view) = converter.create_nv12_texture()?;
@@ -1088,6 +1244,20 @@ where
 
     sink.finalize()?;
 
+    // Substituição atômica segura do arquivo destino
+    if output_path.exists() {
+        let _ = std::fs::remove_file(output_path);
+    }
+    if let Err(e) = std::fs::rename(&part_path, output_path) {
+        let _ = std::fs::remove_file(&part_path);
+        return Err(format!("Falha ao mover arquivo exportado final para {}: {e}", output_path.display()));
+    }
+
+    {
+        let mut guard = EXPORT_CANCEL_FLAG.write();
+        *guard = None;
+    }
+
     let final_elapsed = t_start.elapsed().as_secs_f64();
     let avg_fps = if final_elapsed > 0.05 { (total_frames_written as f64) / final_elapsed } else { 0.0 };
 
@@ -1208,6 +1378,7 @@ mod tests {
             scale: None,
             position_x: None,
             position_y: None,
+            ..Default::default()
         };
         let clip_b1 = TimelineClipExport {
             id: "clip_video1_part1".to_string(),
@@ -1219,6 +1390,7 @@ mod tests {
             scale: None,
             position_x: None,
             position_y: None,
+            ..Default::default()
         };
 
         // 7 & 8. Adicionar trilha de música com volume e fades
@@ -1289,6 +1461,7 @@ mod tests {
                     scale: None,
                     position_x: None,
                     position_y: None,
+                    ..Default::default()
                 },
                 TimelineClipData {
                     id: clip_b1.id.clone(),
@@ -1303,6 +1476,7 @@ mod tests {
                     scale: None,
                     position_x: None,
                     position_y: None,
+                    ..Default::default()
                 },
             ],
             music_tracks: if has_music {
@@ -1418,6 +1592,7 @@ mod tests {
             scale: None,
             position_x: None,
             position_y: None,
+            ..Default::default()
         };
         let clip2 = TimelineClipExport {
             id: "clip_v2".to_string(),
@@ -1429,6 +1604,7 @@ mod tests {
             scale: None,
             position_x: None,
             position_y: None,
+            ..Default::default()
         };
 
         // Simulação de corte independente de músicas:
@@ -1549,6 +1725,7 @@ mod tests {
                     scale: None,
                     position_x: None,
                     position_y: None,
+                    ..Default::default()
                 },
                 TimelineClipExport {
                     id: "clip_2".to_string(),
@@ -1560,6 +1737,7 @@ mod tests {
                     scale: None,
                     position_x: None,
                     position_y: None,
+                    ..Default::default()
                 },
             ],
             music_tracks: vec![],

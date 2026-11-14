@@ -283,9 +283,23 @@ export function Timeline({
           </div>
 
           {/* 2. Área das Faixas */}
-          <div className="flex-1 flex flex-col py-2 space-y-2">
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget) {
+                onSelectClip(null, null);
+              }
+            }}
+            className="flex-1 flex flex-col py-2 space-y-2 cursor-default"
+          >
             {/* Faixa 1: Vídeo & Áudio do Jogo */}
-            <div className="h-16 bg-[#0E121A] border-y border-zinc-800/80 relative flex items-center">
+            <div
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  onSelectClip(null, null);
+                }
+              }}
+              className="h-16 bg-[#0E121A] border-y border-zinc-800/80 relative flex items-center"
+            >
               {/* Rótulo da Faixa */}
               <div className="absolute left-2 z-20 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-sm border border-zinc-700/60 text-[10px] font-semibold text-purple-300">
                 <Film className="h-3 w-3 text-purple-400" />
@@ -375,7 +389,14 @@ export function Timeline({
             </div>
 
             {/* Faixa 2: Músicas de Fundo (Suporte Multitrechos) */}
-            <div className="h-14 bg-[#0B0E14] border-y border-zinc-800/80 relative flex items-center">
+            <div
+              onClick={(e) => {
+                if (e.target === e.currentTarget) {
+                  onSelectClip(null, null);
+                }
+              }}
+              className="h-14 bg-[#0B0E14] border-y border-zinc-800/80 relative flex items-center"
+            >
               {/* Rótulo da Faixa */}
               <div className="absolute left-2 z-20 pointer-events-none flex items-center gap-1.5 px-2 py-0.5 rounded bg-black/75 backdrop-blur-sm border border-zinc-700/60 text-[10px] font-semibold text-emerald-300">
                 <Music className="h-3 w-3 text-emerald-400" />

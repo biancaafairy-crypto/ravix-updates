@@ -16,6 +16,8 @@ interface ExportModalProps {
   onClose: () => void;
   defaultOutputPath: string;
   totalDurationSecs: number;
+  selectedClipName?: string;
+  selectedClipDuration?: number;
   framingMode: "fit" | "stretch" | "fill_crop";
   onFramingChange: (mode: "fit" | "stretch" | "fill_crop") => void;
   isExporting: boolean;
@@ -37,6 +39,7 @@ interface ExportModalProps {
     fps: number;
     bitrateKbps: number;
     framingMode: string;
+    exportScope?: "full" | "selected";
   }) => void;
   onCancelExport: () => void;
 }
@@ -46,6 +49,8 @@ export function ExportModal({
   onClose,
   defaultOutputPath,
   totalDurationSecs,
+  selectedClipName,
+  selectedClipDuration,
   framingMode,
   onFramingChange,
   isExporting,
@@ -57,13 +62,17 @@ export function ExportModal({
   const [fps, setFps] = useState<number>(60);
   const [bitrateKbps, setBitrateKbps] = useState<number>(25000);
   const [outputPath, setOutputPath] = useState<string>(defaultOutputPath);
+  const [exportScope, setExportScope] = useState<"full" | "selected">("full");
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [isRetryingAfterError, setIsRetryingAfterError] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
   async function handleBrowseOutput() {
     try {
+      setValidationError(null);
       const selected = await save({
-        defaultPath: outputPath || "highlight_final.mp4",
+        defaultPath: outputPath || defaultOutputPath || "highlight_final.mp4",
         filters: [{ name: "Vídeo MP4", extensions: ["mp4"] }],
       });
       if (typeof selected === "string" && selected.length > 0) {
@@ -74,13 +83,33 @@ export function ExportModal({
     }
   }
 
-  function handleStart() {
+  async function handleStart() {
+    setValidationError(null);
+    const targetPath = outputPath || defaultOutputPath;
+    if (!targetPath || targetPath.trim().length === 0) {
+      setValidationError("Por favor, selecione a pasta e o nome do arquivo para exportar.");
+      return;
+    }
+
+    // Pré-validação do caminho antes de iniciar
+    try {
+      const check = await invoke<any>("validate_export_destination", { path: targetPath });
+      if (!check.isValid) {
+        setValidationError(check.message || "Destino de gravação inválido ou sem permissão.");
+        return;
+      }
+    } catch (e) {
+      console.warn("Validação local do destino:", e);
+    }
+
+    setIsRetryingAfterError(false);
     onStartExport({
-      outputPath: outputPath || defaultOutputPath,
+      outputPath: targetPath,
       resolutionMode,
       fps,
       bitrateKbps,
       framingMode,
+      exportScope,
     });
   }
 
@@ -146,8 +175,8 @@ export function ExportModal({
 
         {/* Corpo do Modal */}
         <div className="p-6 space-y-5 text-xs text-zinc-300">
-          {/* Se estiver exportando ou concluído */}
-          {isExporting || isDone || isError ? (
+          {/* Se estiver exportando, concluído ou com erro ainda não dispensado */}
+          {isExporting || isDone || (isError && !isRetryingAfterError) ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-white flex items-center gap-2">
@@ -194,11 +223,34 @@ export function ExportModal({
                 </div>
               </div>
 
-              {/* Mensagem de Erro (se houver) */}
+              {/* Mensagem de Erro com Opção de Recuperação (ETAPA 2) */}
               {isError && (
-                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
-                  <span>{exportProgress?.error || "Erro desconhecido durante a exportação."}</span>
+                <div className="space-y-3 pt-1">
+                  <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
+                    <div className="flex-1 space-y-1">
+                      <div className="font-semibold text-white">Falha ao processar arquivo</div>
+                      <div className="text-[11px] leading-snug">
+                        {exportProgress?.error || "Erro durante o processamento do vídeo."}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsRetryingAfterError(true)}
+                      className="flex-1 py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold transition-colors cursor-pointer text-center"
+                    >
+                      Alterar Destino / Tentar Novamente
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="py-2 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-semibold transition-colors cursor-pointer text-center"
+                    >
+                      Fechar
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -260,6 +312,53 @@ export function ExportModal({
           ) : (
             /* Formulário de Configuração */
             <>
+              {/* Aviso de Validação Precoce (se houver) */}
+              {validationError && (
+                <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-red-400 mt-0.5" />
+                  <span className="text-[11px] leading-snug">{validationError}</span>
+                </div>
+              )}
+
+              {/* Escopo da Exportação (Montagem Completa vs Apenas Selecionado) */}
+              {selectedClipDuration !== undefined && selectedClipDuration > 0 && (
+                <div>
+                  <label className="block text-zinc-400 font-semibold mb-1.5">
+                    Escopo da Exportação:
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExportScope("full")}
+                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        exportScope === "full"
+                          ? "bg-purple-600/20 border-purple-500/60 text-white shadow-sm"
+                          : "bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="font-semibold text-xs">Montagem Completa</div>
+                      <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
+                        {totalDurationSecs.toFixed(1)}s (Todos os clipes)
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExportScope("selected")}
+                      className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                        exportScope === "selected"
+                          ? "bg-purple-600/20 border-purple-500/60 text-white shadow-sm"
+                          : "bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                      }`}
+                    >
+                      <div className="font-semibold text-xs truncate">Apenas Selecionado</div>
+                      <div className="text-[10px] text-zinc-500 font-mono mt-0.5 truncate">
+                        {selectedClipDuration.toFixed(1)}s ({selectedClipName || "Clipe"})
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Resolução */}
               <div>
                 <label className="block text-zinc-400 font-semibold mb-1.5">
@@ -353,7 +452,10 @@ export function ExportModal({
                   <input
                     type="text"
                     value={outputPath}
-                    onChange={(e) => setOutputPath(e.target.value)}
+                    onChange={(e) => {
+                      setOutputPath(e.target.value);
+                      setValidationError(null);
+                    }}
                     className="flex-1 bg-[#121622] border border-zinc-800 rounded-xl px-3 py-2 text-zinc-200 font-mono text-[11px]"
                   />
                   <button
@@ -381,7 +483,7 @@ export function ExportModal({
                   className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold flex items-center gap-2 shadow-lg shadow-purple-900/30 transition-all cursor-pointer"
                 >
                   <Download className="h-4 w-4" />
-                  Exportar Agora
+                  {exportScope === "selected" ? "Exportar Clipe" : "Exportar Agora"}
                 </button>
               </div>
             </>

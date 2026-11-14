@@ -28,7 +28,17 @@ interface VideoPreviewProps {
   onStepFrame: (direction: -1 | 1) => void;
   onUpdateClipTransform?: (
     clipId: string,
-    transform: { scale?: number; positionX?: number; positionY?: number }
+    transform: {
+      scale?: number;
+      scaleX?: number;
+      scaleY?: number;
+      positionX?: number;
+      positionY?: number;
+      cropLeft?: number;
+      cropRight?: number;
+      cropTop?: number;
+      cropBottom?: number;
+    }
   ) => void;
 }
 
@@ -215,10 +225,16 @@ export function VideoPreview({
       ? "object-cover"
       : "object-contain";
 
-  // Parâmetros de escala e posição do clipe atual
+  // Parâmetros de escala, posição e recorte do clipe atual
   const clipScale = activeClip?.scale ?? 1.0;
+  const clipScaleX = activeClip?.scaleX ?? clipScale;
+  const clipScaleY = activeClip?.scaleY ?? clipScale;
   const clipPosX = activeClip?.positionX ?? 0;
   const clipPosY = activeClip?.positionY ?? 0;
+  const cropTop = activeClip?.cropTop ?? 0;
+  const cropRight = activeClip?.cropRight ?? 0;
+  const cropBottom = activeClip?.cropBottom ?? 0;
+  const cropLeft = activeClip?.cropLeft ?? 0;
   const isSelectedVideo =
     selectedTrackType === "video" && !!selectedClipId && activeClip?.id === selectedClipId;
 
@@ -258,7 +274,7 @@ export function VideoPreview({
     window.addEventListener("mouseup", onUp);
   };
 
-  // Manipulação Visual: Arrastar alças para redimensionar (escala)
+  // Manipulação Visual Direcional: 8 Alças Reais (Escala X, Escala Y ou Ambos)
   const handleHandleMouseDown = (
     e: React.MouseEvent,
     dirX: number,
@@ -271,16 +287,36 @@ export function VideoPreview({
     setIsDraggingTransform(true);
     const startX = e.clientX;
     const startY = e.clientY;
-    const initScale = clipScale;
+    const initScaleX = clipScaleX;
+    const initScaleY = clipScaleY;
 
     const onMove = (ev: MouseEvent) => {
-      const deltaX = (ev.clientX - startX) * dirX;
-      const deltaY = (ev.clientY - startY) * dirY;
-      const delta = (deltaX + deltaY) / 150;
-      const nextScale = Math.max(0.5, Math.min(2.0, initScale + delta));
-      onUpdateClipTransform(activeClip.id, {
-        scale: Math.round(nextScale * 100) / 100,
-      });
+      if (dirX !== 0 && dirY === 0) {
+        // Alças Laterais (Centro-Esquerda ou Centro-Direita): Altera apenas largura / ScaleX
+        const deltaX = (ev.clientX - startX) * dirX;
+        const nextScaleX = Math.max(0.2, Math.min(3.0, initScaleX + deltaX / 150));
+        onUpdateClipTransform(activeClip.id, {
+          scaleX: Math.round(nextScaleX * 100) / 100,
+        });
+      } else if (dirX === 0 && dirY !== 0) {
+        // Alças Verticais (Topo-Centro ou Base-Centro): Altera apenas altura / ScaleY
+        const deltaY = (ev.clientY - startY) * dirY;
+        const nextScaleY = Math.max(0.2, Math.min(3.0, initScaleY + deltaY / 150));
+        onUpdateClipTransform(activeClip.id, {
+          scaleY: Math.round(nextScaleY * 100) / 100,
+        });
+      } else if (dirX !== 0 && dirY !== 0) {
+        // 4 Cantos: Altera largura e altura simultaneamente
+        const deltaX = (ev.clientX - startX) * dirX;
+        const deltaY = (ev.clientY - startY) * dirY;
+        const nextScaleX = Math.max(0.2, Math.min(3.0, initScaleX + deltaX / 150));
+        const nextScaleY = Math.max(0.2, Math.min(3.0, initScaleY + deltaY / 150));
+        onUpdateClipTransform(activeClip.id, {
+          scaleX: Math.round(nextScaleX * 100) / 100,
+          scaleY: Math.round(nextScaleY * 100) / 100,
+          scale: Math.round(((nextScaleX + nextScaleY) / 2) * 100) / 100,
+        });
+      }
     };
 
     const onUp = () => {
@@ -327,11 +363,15 @@ export function VideoPreview({
           </div>
         ) : (
           <>
-            {/* Player A com suporte a escala e deslocamento */}
+            {/* Player A com suporte a escala X/Y, deslocamento e corte manual */}
             <video
               ref={videoRefA}
               style={{
-                transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScale})`,
+                transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScaleX}, ${clipScaleY})`,
+                clipPath:
+                  cropTop > 0 || cropRight > 0 || cropBottom > 0 || cropLeft > 0
+                    ? `inset(${cropTop}% ${cropRight}% ${cropBottom}% ${cropLeft}%)`
+                    : undefined,
                 transformOrigin: "center center",
                 transition: isDraggingTransform ? "none" : "transform 0.05s ease-out",
               }}
@@ -346,7 +386,11 @@ export function VideoPreview({
             <video
               ref={videoRefB}
               style={{
-                transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScale})`,
+                transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScaleX}, ${clipScaleY})`,
+                clipPath:
+                  cropTop > 0 || cropRight > 0 || cropBottom > 0 || cropLeft > 0
+                    ? `inset(${cropTop}% ${cropRight}% ${cropBottom}% ${cropLeft}%)`
+                    : undefined,
                 transformOrigin: "center center",
                 transition: isDraggingTransform ? "none" : "transform 0.05s ease-out",
               }}
@@ -357,65 +401,89 @@ export function VideoPreview({
               disablePictureInPicture
             />
 
-            {/* Bounding Box Overlay Interativo (ETAPA 2) */}
+            {/* Bounding Box Overlay Interativo com 8 Alças Reais */}
             {isSelectedVideo && activeClip && (
               <div
                 style={{
-                  transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScale})`,
+                  transform: `translate(${clipPosX}%, ${clipPosY}%) scale(${clipScaleX}, ${clipScaleY})`,
                   transformOrigin: "center center",
                   transition: isDraggingTransform ? "none" : "transform 0.05s ease-out",
                 }}
                 className="absolute inset-0 border-2 border-purple-400/90 pointer-events-auto z-30 shadow-[0_0_15px_rgba(168,85,247,0.3)]"
                 onMouseDown={handleBodyMouseDown}
-                title="Clique e arraste para reposicionar o vídeo"
+                title="Clique e arraste o corpo para reposicionar o clipe"
               >
+                {/* Visualização de Recorte Interno tracejado */}
+                {(cropTop > 0 || cropRight > 0 || cropBottom > 0 || cropLeft > 0) && (
+                  <div
+                    style={{
+                      top: `${cropTop}%`,
+                      right: `${cropRight}%`,
+                      bottom: `${cropBottom}%`,
+                      left: `${cropLeft}%`,
+                    }}
+                    className="absolute border border-dashed border-emerald-400/80 pointer-events-none bg-emerald-500/10"
+                    title="Área ativa do recorte manual (Crop)"
+                  />
+                )}
+
                 {/* 4 Alças dos Cantos */}
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, -1, -1)}
                   className="absolute -top-2 -left-2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-nwse-resize hover:scale-125 transition-transform"
-                  title="Redimensionar (Canto Superior Esquerdo)"
+                  title="Redimensionar Ambos (Canto Superior Esquerdo)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, 1, -1)}
                   className="absolute -top-2 -right-2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-nesw-resize hover:scale-125 transition-transform"
-                  title="Redimensionar (Canto Superior Direito)"
+                  title="Redimensionar Ambos (Canto Superior Direito)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, 1, 1)}
                   className="absolute -bottom-2 -right-2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-nwse-resize hover:scale-125 transition-transform"
-                  title="Redimensionar (Canto Inferior Direito)"
+                  title="Redimensionar Ambos (Canto Inferior Direito)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, -1, 1)}
                   className="absolute -bottom-2 -left-2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-nesw-resize hover:scale-125 transition-transform"
-                  title="Redimensionar (Canto Inferior Esquerdo)"
+                  title="Redimensionar Ambos (Canto Inferior Esquerdo)"
                 />
 
-                {/* 4 Alças das Bordas */}
+                {/* 4 Alças Direcionais das Bordas */}
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, 0, -1)}
                   className="absolute -top-2 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-ns-resize hover:scale-125 transition-transform"
-                  title="Redimensionar Altura"
+                  title="Redimensionar Altura (Topo)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, 1, 0)}
                   className="absolute top-1/2 -right-2 -translate-y-1/2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-ew-resize hover:scale-125 transition-transform"
-                  title="Redimensionar Largura"
+                  title="Redimensionar Largura (Direita)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, 0, 1)}
                   className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-ns-resize hover:scale-125 transition-transform"
-                  title="Redimensionar Altura"
+                  title="Redimensionar Altura (Base)"
                 />
                 <div
                   onMouseDown={(e) => handleHandleMouseDown(e, -1, 0)}
                   className="absolute top-1/2 -left-2 -translate-y-1/2 w-3.5 h-3.5 bg-purple-500 border-2 border-white rounded-sm shadow-md cursor-ew-resize hover:scale-125 transition-transform"
-                  title="Redimensionar Largura"
+                  title="Redimensionar Largura (Esquerda)"
                 />
 
-                {/* Badge Discreta com Escala */}
-                <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/80 backdrop-blur-sm border border-purple-500/40 text-[10px] font-mono text-purple-300 font-semibold pointer-events-none">
-                  {Math.round(clipScale * 100)}% ({clipPosX > 0 ? `+${clipPosX}` : clipPosX}%, {clipPosY > 0 ? `+${clipPosY}` : clipPosY}%)
+                {/* Badge Discreta com Escala X e Y */}
+                <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/80 backdrop-blur-sm border border-purple-500/40 text-[10px] font-mono text-purple-300 font-semibold pointer-events-none flex items-center gap-1.5">
+                  <span>
+                    {Math.round(clipScaleX * 100)}% × {Math.round(clipScaleY * 100)}%
+                  </span>
+                  <span className="text-zinc-400">
+                    ({clipPosX > 0 ? `+${clipPosX}` : clipPosX}%, {clipPosY > 0 ? `+${clipPosY}` : clipPosY}%)
+                  </span>
+                  {(cropTop > 0 || cropRight > 0 || cropBottom > 0 || cropLeft > 0) && (
+                    <span className="text-emerald-300 font-bold bg-emerald-950/60 px-1 rounded border border-emerald-500/40">
+                      CROP
+                    </span>
+                  )}
                 </div>
               </div>
             )}

@@ -317,6 +317,11 @@ fn cancel_timeline_export() {
 }
 
 #[tauri::command]
+fn validate_export_destination(path: String) -> Result<crate::models::ExportDestinationCheck, String> {
+    crate::editor::validate_export_destination(&path)
+}
+
+#[tauri::command]
 fn save_ravix_project(path: String, project_json: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if let Some(parent) = p.parent() {
@@ -520,6 +525,7 @@ pub fn run() {
             get_media_metadata,
             start_timeline_export,
             cancel_timeline_export,
+            validate_export_destination,
             save_ravix_project,
             load_ravix_project,
             check_media_files_exist,

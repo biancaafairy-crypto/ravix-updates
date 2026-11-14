@@ -80,6 +80,63 @@ export function VideoEditorView({
   // Duração Total da Sequência de Vídeo na Timeline
   const totalDurationSecs = videoClips.reduce((acc, c) => acc + c.durationSecs, 0);
 
+  // Clipes e músicas selecionados contextualmente
+  const selectedClip =
+    selectedTrackType === "video" && selectedClipId
+      ? videoClips.find((c) => c.id === selectedClipId) ?? null
+      : null;
+
+  const selectedMusic =
+    selectedTrackType === "music" && selectedClipId
+      ? musicTracks.find((m) => m.id === selectedClipId) ?? null
+      : null;
+
+  // Intervalo do elemento selecionado para reprodução orientada a clipe
+  const selectedInterval = selectedClip
+    ? {
+        start: selectedClip.timelineStartSecs,
+        end: selectedClip.timelineStartSecs + selectedClip.durationSecs,
+      }
+    : selectedMusic
+    ? {
+        start: selectedMusic.timelineStartSecs,
+        end: selectedMusic.timelineStartSecs + selectedMusic.durationSecs,
+      }
+    : null;
+
+  // Função inteligente de Play / Pause (respeita seleção de clipe ou montagem geral)
+  const handlePlayPause = () => {
+    if (isPlaying) {
+      setIsPlaying(false);
+      return;
+    }
+
+    if (selectedInterval) {
+      // Reprodução restrita ao intervalo do clipe selecionado
+      if (
+        playheadSecs >= selectedInterval.end - 0.05 ||
+        playheadSecs < selectedInterval.start
+      ) {
+        setPlayheadSecs(selectedInterval.start);
+      }
+      setIsPlaying(true);
+    } else {
+      // Reprodução contínua da montagem completa
+      if (playheadSecs >= totalDurationSecs - 0.05 && totalDurationSecs > 0) {
+        setPlayheadSecs(0);
+      }
+      setIsPlaying(true);
+    }
+  };
+
+  // Recomeçar: move para o início, desseleciona elementos pontuais e reproduz montagem completa
+  const handleRestart = () => {
+    setPlayheadSecs(0);
+    setSelectedClipId(null);
+    setSelectedTrackType(null);
+    setIsPlaying(true);
+  };
+
   // Auto-dismiss de avisos de sucesso após 4s (ETAPA 7)
   useEffect(() => {
     if (editorNotice?.type === "ok") {
@@ -112,9 +169,16 @@ export function VideoEditorView({
 
         setPlayheadSecs((prev) => {
           const next = prev + deltaSecs;
-          if (next >= totalDurationSecs) {
-            setIsPlaying(false);
-            return totalDurationSecs;
+          if (selectedInterval) {
+            if (next >= selectedInterval.end) {
+              setIsPlaying(false);
+              return selectedInterval.end;
+            }
+          } else {
+            if (next >= totalDurationSecs) {
+              setIsPlaying(false);
+              return totalDurationSecs;
+            }
           }
           return next;
         });
@@ -124,7 +188,7 @@ export function VideoEditorView({
       animId = requestAnimationFrame(tick);
     }
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, totalDurationSecs]);
+  }, [isPlaying, totalDurationSecs, selectedInterval]);
 
   // Carregar vídeo inicial passado da aba do Gravador (se houver)
   useEffect(() => {
@@ -166,7 +230,7 @@ export function VideoEditorView({
 
       if (e.code === "Space") {
         e.preventDefault();
-        setIsPlaying((p) => !p);
+        handlePlayPause();
       } else if (e.code === "KeyS") {
         e.preventDefault();
         handleSplitAtPlayhead();
@@ -593,18 +657,44 @@ export function VideoEditorView({
     pushState({ videoClips, musicTracks: nextMusic });
   }
 
-  // Atualizar Transformação do Clipe (via Bounding Box no Preview)
+  // Atualizar Transformação e Recorte do Clipe (via Bounding Box no Preview ou Painel)
   function handleUpdateClipTransform(
     clipId: string,
-    transform: { scale?: number; positionX?: number; positionY?: number }
+    transform: {
+      scale?: number;
+      scaleX?: number;
+      scaleY?: number;
+      positionX?: number;
+      positionY?: number;
+      cropLeft?: number;
+      cropRight?: number;
+      cropTop?: number;
+      cropBottom?: number;
+    }
   ) {
     const nextClips = videoClips.map((c) =>
       c.id === clipId
         ? {
             ...c,
             scale: transform.scale !== undefined ? transform.scale : c.scale,
+            scaleX:
+              transform.scaleX !== undefined
+                ? transform.scaleX
+                : transform.scale !== undefined
+                ? transform.scale
+                : c.scaleX ?? c.scale,
+            scaleY:
+              transform.scaleY !== undefined
+                ? transform.scaleY
+                : transform.scale !== undefined
+                ? transform.scale
+                : c.scaleY ?? c.scale,
             positionX: transform.positionX !== undefined ? transform.positionX : c.positionX,
             positionY: transform.positionY !== undefined ? transform.positionY : c.positionY,
+            cropLeft: transform.cropLeft !== undefined ? transform.cropLeft : c.cropLeft,
+            cropRight: transform.cropRight !== undefined ? transform.cropRight : c.cropRight,
+            cropTop: transform.cropTop !== undefined ? transform.cropTop : c.cropTop,
+            cropBottom: transform.cropBottom !== undefined ? transform.cropBottom : c.cropBottom,
           }
         : c
     );
@@ -613,20 +703,26 @@ export function VideoEditorView({
 
   // Resetar Transformação do Clipe para padrão (100%, 0, 0)
   function handleResetClipTransform(clipId: string) {
-    handleUpdateClipTransform(clipId, { scale: 1.0, positionX: 0, positionY: 0 });
+    handleUpdateClipTransform(clipId, {
+      scale: 1.0,
+      scaleX: 1.0,
+      scaleY: 1.0,
+      positionX: 0,
+      positionY: 0,
+    });
     setEditorNotice({ type: "ok", text: "Escala e posição restauradas ao padrão." });
   }
 
-  // Clipes e músicas selecionados contextualmente
-  const selectedClip =
-    selectedTrackType === "video" && selectedClipId
-      ? videoClips.find((c) => c.id === selectedClipId) ?? null
-      : null;
-
-  const selectedMusic =
-    selectedTrackType === "music" && selectedClipId
-      ? musicTracks.find((m) => m.id === selectedClipId) ?? null
-      : null;
+  // Resetar Recorte Manual (Crop) para 0%
+  function handleResetClipCrop(clipId: string) {
+    handleUpdateClipTransform(clipId, {
+      cropLeft: 0,
+      cropRight: 0,
+      cropTop: 0,
+      cropBottom: 0,
+    });
+    setEditorNotice({ type: "ok", text: "Recorte manual de bordas restaurado." });
+  }
 
   // Reorganizar Clipes por Arraste
   function handleReorderClips(fromIdx: number, toIdx: number) {
@@ -733,6 +829,7 @@ export function VideoEditorView({
     fps: number;
     bitrateKbps: number;
     framingMode: string;
+    exportScope?: "full" | "selected";
   }) {
     if (videoClips.length === 0) {
       setEditorNotice({
@@ -751,27 +848,39 @@ export function VideoEditorView({
         currentFps: 0,
       });
 
+      const isSelectedOnly = options.exportScope === "selected" && selectedClip;
+      const targetClips = isSelectedOnly && selectedClip ? [selectedClip] : videoClips;
+
       const exportConfig: TimelineExportConfig = {
         outputPath: options.outputPath,
         resolutionMode: options.resolutionMode,
         framingMode: options.framingMode,
         fps: options.fps,
         bitrateKbps: options.bitrateKbps,
-        clips: videoClips.map((c) => ({
+        clips: targetClips.map((c) => ({
           id: c.id,
           sourcePath: c.sourcePath,
           inPointSecs: c.inPointSecs,
           outPointSecs: c.outPointSecs,
           volume: c.volume,
           isMuted: c.isMuted,
-          scale: c.scale,
-          positionX: c.positionX,
-          positionY: c.positionY,
+          scale: c.scale ?? 1.0,
+          scaleX: c.scaleX ?? c.scale ?? 1.0,
+          scaleY: c.scaleY ?? c.scale ?? 1.0,
+          positionX: c.positionX ?? 0.0,
+          positionY: c.positionY ?? 0.0,
+          cropLeft: c.cropLeft ?? 0.0,
+          cropRight: c.cropRight ?? 0.0,
+          cropTop: c.cropTop ?? 0.0,
+          cropBottom: c.cropBottom ?? 0.0,
         })),
         musicTracks: musicTracks.map((m) => ({
           id: m.id,
           sourcePath: m.sourcePath,
-          startTimelineSecs: m.timelineStartSecs,
+          startTimelineSecs:
+            isSelectedOnly && selectedClip
+              ? Math.max(0, m.timelineStartSecs - selectedClip.timelineStartSecs)
+              : m.timelineStartSecs,
           inPointSecs: m.inPointSecs,
           durationSecs: m.durationSecs,
           volume: m.volume,
@@ -799,10 +908,11 @@ export function VideoEditorView({
     setIsExporting(false);
   }
 
-  // Caminho de exportação sugerido padrão dinâmico (ETAPA 13)
+  // Caminho de exportação sugerido padrão dinâmico (SEGURO — nunca salva na raiz C:\Users)
+  const cleanProjName = projectName.replace(/[^a-zA-Z0-9_-]/g, "_") || "Meu_Highlight_FiveM";
   const suggestedOutputPath = defaultVideoDir
-    ? `${defaultVideoDir}\\${projectName.replace(/[^a-zA-Z0-9_-]/g, "_")}_export_1080p.mp4`
-    : `C:\\Users\\${projectName.replace(/[^a-zA-Z0-9_-]/g, "_")}_export_1080p.mp4`;
+    ? `${defaultVideoDir}\\${cleanProjName}_export_1080p.mp4`
+    : `${cleanProjName}_export_1080p.mp4`;
 
   // Redimensionamento de altura da Timeline
   const handleSplitterMouseDown = (e: React.MouseEvent) => {
@@ -938,18 +1048,8 @@ export function VideoEditorView({
           framingMode={framingMode}
           selectedClipId={selectedClipId}
           selectedTrackType={selectedTrackType}
-          onPlayPause={() => {
-            if (playheadSecs >= totalDurationSecs - 0.1 && totalDurationSecs > 0) {
-              setPlayheadSecs(0);
-              setIsPlaying(true);
-            } else {
-              setIsPlaying((p) => !p);
-            }
-          }}
-          onRestart={() => {
-            setPlayheadSecs(0);
-            setIsPlaying(true);
-          }}
+          onPlayPause={handlePlayPause}
+          onRestart={handleRestart}
           onSeek={(newSecs) => setPlayheadSecs(Math.max(0, Math.min(totalDurationSecs, newSecs)))}
           onStepFrame={(dir) =>
             setPlayheadSecs((p) =>
@@ -969,6 +1069,7 @@ export function VideoEditorView({
           onUpdateClip={handleUpdateClipProperties}
           onUpdateMusic={handleUpdateMusicProperties}
           onResetClipTransform={handleResetClipTransform}
+          onResetClipCrop={handleResetClipCrop}
         />
       </div>
 
@@ -1014,6 +1115,17 @@ export function VideoEditorView({
           onSelectClip={(id, type) => {
             setSelectedClipId(id);
             setSelectedTrackType(type);
+            if (id && type === "video") {
+              const clip = videoClips.find((c) => c.id === id);
+              if (clip) {
+                setPlayheadSecs(clip.timelineStartSecs);
+              }
+            } else if (id && type === "music") {
+              const music = musicTracks.find((m) => m.id === id);
+              if (music) {
+                setPlayheadSecs(music.timelineStartSecs);
+              }
+            }
           }}
           onSeek={(secs) => setPlayheadSecs(Math.max(0, Math.min(totalDurationSecs, secs)))}
           onUpdateClip={handleUpdateClip}
@@ -1028,6 +1140,8 @@ export function VideoEditorView({
         onClose={() => setIsExportModalOpen(false)}
         defaultOutputPath={suggestedOutputPath}
         totalDurationSecs={totalDurationSecs}
+        selectedClipName={selectedClip?.name}
+        selectedClipDuration={selectedClip?.durationSecs}
         framingMode={framingMode}
         onFramingChange={setFramingMode}
         isExporting={isExporting}

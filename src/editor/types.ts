@@ -24,8 +24,14 @@ export interface TimelineClip {
   volume: number; // 0.0 a 2.0 (1.0 = normal)
   isMuted: boolean;
   scale?: number; // 0.5 a 2.0 (1.0 = 100%)
+  scaleX?: number; // 0.5 a 2.0 (1.0 = 100%)
+  scaleY?: number; // 0.5 a 2.0 (1.0 = 100%)
   positionX?: number; // -50 a 50 (%)
   positionY?: number; // -50 a 50 (%)
+  cropLeft?: number; // 0 a 50 (%)
+  cropRight?: number; // 0 a 50 (%)
+  cropTop?: number; // 0 a 50 (%)
+  cropBottom?: number; // 0 a 50 (%)
   framingMode?: "stretch" | "fit" | "fill_crop";
 }
 
@@ -55,6 +61,13 @@ export interface RavixProject {
   bitrateKbps: number;
 }
 
+export interface ExportDestinationCheck {
+  isValid: boolean;
+  exists: boolean;
+  canWrite: boolean;
+  message?: string | null;
+}
+
 export interface TimelineExportConfig {
   outputPath: string;
   resolutionMode: string;
@@ -71,8 +84,14 @@ export interface TimelineExportConfig {
     volume: number;
     isMuted: boolean;
     scale?: number;
+    scaleX?: number;
+    scaleY?: number;
     positionX?: number;
     positionY?: number;
+    cropLeft?: number;
+    cropRight?: number;
+    cropTop?: number;
+    cropBottom?: number;
   }[];
   musicTracks: {
     id: string;
