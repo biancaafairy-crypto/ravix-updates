@@ -71,6 +71,11 @@ pub fn list_recordings(output_dir: &str) -> Vec<RecordedFileInfo> {
                 continue;
             }
             if let Ok(meta) = entry.metadata() {
+                if meta.len() == 0 {
+                    // Limpar arquivo de 0 bytes gerado por encerramento anormal ou aborto anterior
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
                 let modified_ts = meta
                     .modified()
                     .ok()

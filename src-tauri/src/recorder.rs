@@ -537,6 +537,7 @@ fn run_recording_pipeline(
             drop(video_tx);
             drop(audio_tx);
             let _ = muxer_handle.join();
+            let _ = std::fs::remove_file(&first_path);
             let _ = startup_tx.send(Err(e.clone()));
             return Err(e);
         }
@@ -545,6 +546,7 @@ fn run_recording_pipeline(
             drop(video_tx);
             drop(audio_tx);
             let _ = muxer_handle.join();
+            let _ = std::fs::remove_file(&first_path);
             let err = "Thread do muxer encerrou durante a inicialização.".to_string();
             let _ = startup_tx.send(Err(err.clone()));
             return Err(err);
@@ -566,6 +568,7 @@ fn run_recording_pipeline(
                 wgc.stop();
                 drop(video_tx);
                 let _ = muxer_handle.join();
+                let _ = std::fs::remove_file(&first_path);
                 let _ = startup_tx.send(Err(e.clone()));
                 return Err(e);
             }

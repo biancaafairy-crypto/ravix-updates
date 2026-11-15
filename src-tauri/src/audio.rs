@@ -8,9 +8,9 @@ use std::time::Duration;
 use windows::core::PCWSTR;
 use windows::Win32::Media::Audio::{
     eCapture, eCommunications, eConsole, eRender, IAudioCaptureClient, IAudioClient,
-    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
+    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
     AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
-    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX, WAVE_FORMAT_PCM,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, DEVICE_STATE_ACTIVE, WAVEFORMATEX, WAVE_FORMAT_PCM,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -43,28 +43,63 @@ impl WasapiCaptureStream {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .map_err(|e| format!("Falha ao criar IMMDeviceEnumerator: {e}"))?;
 
-        let device: IMMDevice = if let Some(id) = device_id.filter(|s| !s.trim().is_empty()) {
+        // 1. Tentar abrir e ativar o dispositivo específico se fornecido
+        let mut audio_client: Option<IAudioClient> = None;
+        if let Some(id) = device_id.filter(|s| !s.trim().is_empty()) {
             let wide: Vec<u16> = std::ffi::OsStr::new(id)
                 .encode_wide()
                 .chain(std::iter::once(0))
                 .collect();
-            enumerator
-                .GetDevice(PCWSTR(wide.as_ptr()))
-                .map_err(|e| format!("Dispositivo de áudio não encontrado ({id}): {e}"))?
-        } else if is_loopback {
-            enumerator
-                .GetDefaultAudioEndpoint(eRender, eConsole)
-                .map_err(|e| format!("Sem dispositivo de reprodução padrão: {e}"))?
-        } else {
-            enumerator
-                .GetDefaultAudioEndpoint(eCapture, eCommunications)
-                .or_else(|_| enumerator.GetDefaultAudioEndpoint(eCapture, eConsole))
-                .map_err(|e| format!("Sem microfone padrão disponível: {e}"))?
-        };
+            if let Ok(specific_dev) = enumerator.GetDevice(PCWSTR(wide.as_ptr())) {
+                let state_res = specific_dev.GetState();
+                let is_active = state_res.as_ref().map(|&s| s == DEVICE_STATE_ACTIVE).unwrap_or(false);
+                if is_active {
+                    match specific_dev.Activate::<IAudioClient>(CLSCTX_ALL, None) {
+                        Ok(client) => {
+                            audio_client = Some(client);
+                        }
+                        Err(e) => {
+                            crate::logger::warn(
+                                "audio",
+                                &format!("Dispositivo específico ({id}) falhou ao ativar ({e}). Recorrendo ao dispositivo padrão..."),
+                            );
+                        }
+                    }
+                } else {
+                    let st_val = state_res.map(|s| s.0).unwrap_or(0);
+                    crate::logger::warn(
+                        "audio",
+                        &format!("Dispositivo específico ({id}) não está ativo (state={st_val}). Recorrendo ao dispositivo padrão..."),
+                    );
+                }
+            } else {
+                crate::logger::warn(
+                    "audio",
+                    &format!("Dispositivo específico ({id}) não foi encontrado. Recorrendo ao dispositivo padrão..."),
+                );
+            }
+        }
 
-        let audio_client: IAudioClient = device
-            .Activate(CLSCTX_ALL, None)
-            .map_err(|e| format!("Falha ao ativar IAudioClient: {e}"))?;
+        // 2. Fallback automático para o dispositivo padrão se o específico não puder ser ativado
+        let audio_client = if let Some(client) = audio_client {
+            client
+        } else {
+            let def_device = if is_loopback {
+                enumerator
+                    .GetDefaultAudioEndpoint(eRender, eConsole)
+                    .or_else(|_| enumerator.GetDefaultAudioEndpoint(eRender, eCommunications))
+                    .map_err(|e| format!("Sem dispositivo de reprodução padrão ativo: {e}"))?
+            } else {
+                enumerator
+                    .GetDefaultAudioEndpoint(eCapture, eCommunications)
+                    .or_else(|_| enumerator.GetDefaultAudioEndpoint(eCapture, eConsole))
+                    .map_err(|e| format!("Sem microfone padrão ativo disponível: {e}"))?
+            };
+
+            def_device
+                .Activate::<IAudioClient>(CLSCTX_ALL, None)
+                .map_err(|e| format!("Falha ao ativar IAudioClient do dispositivo padrão: {e}"))?
+        };
 
         let block_align = AUDIO_CHANNELS * (AUDIO_BITS_PER_SAMPLE / 8);
         let format = WAVEFORMATEX {
@@ -200,9 +235,11 @@ impl AudioCaptureHandle {
                     match WasapiCaptureStream::open(true, system_device_id.as_deref()) {
                         Ok(s) => Some(s),
                         Err(e) => {
-                            let _ = init_tx.send(Err(e));
-                            CoUninitialize();
-                            return;
+                            crate::logger::warn(
+                                "audio",
+                                &format!("Falha ao inicializar áudio do sistema: {e}. Gravando vídeo com faixa de áudio em silêncio..."),
+                            );
+                            None
                         }
                     }
                 } else {
@@ -213,9 +250,11 @@ impl AudioCaptureHandle {
                     match WasapiCaptureStream::open(false, mic_device_id.as_deref()) {
                         Ok(s) => Some(s),
                         Err(e) => {
-                            let _ = init_tx.send(Err(e));
-                            CoUninitialize();
-                            return;
+                            crate::logger::warn(
+                                "audio",
+                                &format!("Falha ao inicializar microfone: {e}. Microfone ignorado nesta sessão."),
+                            );
+                            None
                         }
                     }
                 } else {

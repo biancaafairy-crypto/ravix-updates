@@ -92,6 +92,28 @@ fn start_with_arcs(
         "Microsoft Media Foundation H.264".to_string()
     };
 
+    // Auto-validação resiliente de áudio do sistema (previne 0x88890004 AUDCLNT_E_DEVICE_INVALIDATED)
+    if let Some(ref dev_id) = cfg.system_audio_device_id {
+        if !caps.render_devices.iter().any(|d| &d.id == dev_id) {
+            logger::warn(
+                "recorder",
+                &format!("Dispositivo de áudio salvo ({dev_id}) não está ativo. Revertendo para o padrão."),
+            );
+            cfg.system_audio_device_id = None;
+        }
+    }
+
+    // Auto-validação resiliente de microfone
+    if let Some(ref dev_id) = cfg.mic_device_id {
+        if !caps.capture_devices.iter().any(|d| &d.id == dev_id) {
+            logger::warn(
+                "recorder",
+                &format!("Dispositivo de microfone salvo ({dev_id}) não está ativo. Revertendo para o padrão."),
+            );
+            cfg.mic_device_id = None;
+        }
+    }
+
     *config.lock() = cfg.clone();
     let _ = save_config(&cfg);
     logger::info(
