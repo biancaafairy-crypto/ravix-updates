@@ -6,7 +6,7 @@
     [string]$Version = "0.2.3",
 
     [Parameter(Mandatory=$false)]
-    [string]$Repo = "biancaafairy-crypto/ravix-updates"
+    [string]$Repo = "ivyfated/ravix-updates"
 )
 
 if (-not $Token) {
