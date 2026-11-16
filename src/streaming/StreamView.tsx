@@ -36,6 +36,14 @@ function generateRoomId(): string {
   return `RAVIX-${code}`;
 }
 
+const GOOGLE_ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun3.l.google.com:19302" },
+  { urls: "stun:stun4.l.google.com:19302" },
+];
+
 export function StreamView() {
   // Modo de operação da aba: "idle" (painel unificado inicial), "host" (transmitindo) ou "spectator" (assistindo)
   const [mode, setMode] = useState<StreamMode>("idle");
@@ -168,11 +176,7 @@ export function StreamView() {
       const peer = new Peer(newRoomId.trim(), {
         debug: 1,
         config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
-          ],
+          iceServers: GOOGLE_ICE_SERVERS,
         },
       });
 
@@ -356,7 +360,7 @@ export function StreamView() {
       const viewerPeer = new Peer({
         debug: 1,
         config: {
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+          iceServers: GOOGLE_ICE_SERVERS,
         },
       });
 
@@ -442,11 +446,7 @@ export function StreamView() {
       const viewerPeer = new Peer({
         debug: 1,
         config: {
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-            { urls: "stun:stun2.l.google.com:19302" },
-          ],
+          iceServers: GOOGLE_ICE_SERVERS,
         },
       });
 

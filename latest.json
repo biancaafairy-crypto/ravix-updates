@@ -1,11 +1,11 @@
 {
-  "version": "0.3.6",
-  "notes": "RAVIX V0.3.6 - Correção definitiva dos links web (abertura obrigatória no GitHub Pages oficial), tratamento do erro peer-unavailable com botões de recuperação, sincronização automática do watch.html na raiz e limpeza total de estado ao encerrar transmissões.",
-  "pub_date": "2026-11-16T21:08:00Z",
+  "version": "0.3.7",
+  "notes": "RAVIX V0.3.7 - Configuração explícita de redundância de servidores STUN do Google (stun.l.google.com:19302, stun1, stun2, stun3 e stun4) para travessia robusta de NAT e firewall em conexões internacionais e intercontinentais (Brasil - Portugal), tanto no app desktop quanto na interface web.",
+  "pub_date": "2026-11-16T21:56:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcEVDbUJMZnlEZ0ZpR1ZKbzUxQ3djY3ZlQWJIVmtKMU8zdUNieldFSEpwNEtOOXN3RlJEM2VoVU80S1pLcEZmd1JWRkk2SG1qYjMyR0pTUCtXZzJlMmc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODYzMjE3CWZpbGU6UkFWSVhfMC4zLjZfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy42CjlXMVhUcm4wMi9HQkE2SXlDcytXOHBjWEtidWROSC9URVd2UzdmaGZpQTk3RlhJSHU2SXo3V2NQSVFtblljRGdPeE9odEZSSkVPOEUzMHRGKytqVERRPT0K",
-      "url": "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.6/RAVIX_0.3.6_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcElDcnlRZkUxanMxQjFYaGVpbGtEbXRSK3hqUGJhK2U5TTFqWWpRQXpqYUo1MWViQWpIUUk0ZVp2OE4rNE9LK2g5ZXMxalc4cnpsTmdrNHIxbDV0OVF3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODY2MTM3CWZpbGU6UkFWSVhfMC4zLjdfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy43CldGVWhOMnMyVjRsd3hzM0ovbnh3Ni8xU2tQMHFpRjBQNkZKT3c0dlBIM1JQWitkOWdoWTN3dXh5ZUV4LzJ1Ky9TMVNTMlczbDRVdWxtSHNhRGdGcENBPT0K",
+      "url": "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.7/RAVIX_0.3.7_x64-setup.exe"
     }
   }
 }
