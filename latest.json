@@ -1,10 +1,10 @@
 {
     "version":  "0.3.3",
-    "notes":  "RAVIX V0.3.3 — Correções Críticas de Exportação MP4, Reprodução por Seleção, Transformação Direcional 8-Alças, Recorte (Crop) Manual e Atalhos Centralizados: Correção definitiva da falha de exportação 0x80070005 (Acesso Negado) através de pré-validação de diretórios, eliminação de fallback inseguro e escrita atômica via arquivo temporário .part com renomeação segura em 100%; fluxo de edição ágil e intuitivo com foco imediato no clipe selecionado (posicionamento do playhead no frame inicial, exibição automática do bounding box com 8 alças e reprodução exclusiva do trecho com pausa automática no fim do clipe); transição fluida para reprodução contínua da montagem completa ao desmarcar seleção ou clicar em Recomeçar; transformação dimensional independente (escala X e Y separadas ou vinculadas) com paridade 1:1 na renderização D3D11 e MP4 exportado; distinção conceitual de barras pretas e nova ferramenta de recorte (crop) manual de 4 direções para eliminar faixas gravadas de resoluções esticadas (FiveM); centralização da captura e configuração do atalho global de gravação exclusivamente no menu de Configurações, removendo inputs concorrentes.",
-    "pub_date":  "2026-11-14T00:53:00Z",
+    "notes":  "RAVIX V0.3.3 — Correções Críticas de Exportação MP4, Áudio WASAPI Resiliente (0x88890004), Nova Aba de Transmissão ao Vivo, Transformação Direcional 8-Alças e Atalhos Centralizados.",
+    "pub_date":  "2026-11-16T12:15:00Z",
     "platforms":  {
                       "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcE1mYkNrRXNDYzlLTU1HdjdISENmL0VSL2dYYkFMYWhJTWljdktubG42T3hRblJ2UnR4TisrdjNWcUoycVdSL3JGUGs1QWZzc0hBZnIvTVdPU28wYUFzPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODI2Mzk1CWZpbGU6UkFWSVhfMC4zLjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy4zCitlR05CU1JoUzVBNHNVSm9jSlVKTksyeHFhOHg3YXhCMjVERFR5SW5nWEw1dGJvZG80MFBkakUrTm9ldGV4WjA2T1k0Nlk3SXk4SFdlTE0vemE5OEJ3PT0K",
+                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcEs1ZnFzaDZFeG1qWEhBeE5mbktwMjV5cGNKTHE1cUVEOVZCUzYrOWJyTlBTejJGRld3ZVk4TXUrV1VsYVV6NkF5KzZURmUzTm03c042RHdrRE00MHdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODMxMzIxCWZpbGU6UkFWSVhfMC4zLjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy4zCjZ0NVdyV0V0R2QvcGNRSkl0K1gwV3FLNUhkVTVjYXY4U3d1QmVLc3o2aEpOTXNHL0g3NlVIdUxDWStFTVFLdVkvR2ZJVmd1d3R2QlZtVEU5K0pvekR3PT0K",
                                              "url":  "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.3/RAVIX_0.3.3_x64-setup.exe"
                                          }
                   }
