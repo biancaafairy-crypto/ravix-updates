@@ -22,6 +22,7 @@ import {
   MicOff,
   Monitor,
   Play,
+  Radio,
   RefreshCw,
   Settings,
   ShieldCheck,
@@ -40,6 +41,7 @@ import type {
   SystemCapabilities,
 } from "./types";
 import { VideoEditorView } from "./editor/VideoEditorView";
+import { StreamView } from "./streaming/StreamView";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
 function formatElapsed(secs: number): string {
@@ -83,7 +85,7 @@ const DURATION_PRESETS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<"recorder" | "editor">("recorder");
+  const [activeTab, setActiveTab] = useState<"recorder" | "editor" | "stream">("recorder");
 
   // Estado do Gravador
   const [caps, setCaps] = useState<SystemCapabilities | null>(null);
@@ -593,7 +595,18 @@ export default function App() {
                 <span className="h-1.5 w-1.5 rounded-full bg-purple-400 animate-pulse" />
               )}
             </button>
-            {isRecording && activeTab === "editor" && (
+            <button
+              onClick={() => setActiveTab("stream")}
+              className={`px-4 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+                activeTab === "stream"
+                  ? "bg-gradient-to-r from-rose-500/20 to-purple-500/20 text-white border border-rose-500/40 shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200"
+              }`}
+            >
+              <Radio className="h-3.5 w-3.5 text-rose-400" />
+              TRANSMISSÃO
+            </button>
+            {isRecording && activeTab !== "recorder" && (
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-500/15 border border-red-500/30 text-[11px] text-red-300 animate-pulse">
                 <span className="h-2 w-2 rounded-full bg-red-500" />
                 <span>Gravando ({formatElapsed(status.elapsedSecs)})</span>
@@ -1255,13 +1268,18 @@ export default function App() {
             </section>
           </div>
         </main>
-      ) : (
+      ) : activeTab === "editor" ? (
         /* ======================== ABA EDITOR (V0.3.1) ======================== */
         <ErrorBoundary fallbackTitle="Editor de Vídeo RAVIX">
           <VideoEditorView
             initialVideoPath={editorFile}
             onClearInitialVideo={() => setEditorFile(null)}
           />
+        </ErrorBoundary>
+      ) : (
+        /* ======================== ABA TRANSMISSÃO (MVP) ======================== */
+        <ErrorBoundary fallbackTitle="Transmissão P2P RAVIX">
+          <StreamView />
         </ErrorBoundary>
       )}
 

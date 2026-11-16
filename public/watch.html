@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAVIX Live — Transmissão P2P (Tela Oasis)</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+    body {
+      background: #090B0E;
+      color: #F3F4F6;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: #0E1218;
+      border-bottom: 1px solid #1F2937;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo-badge {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo-text {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      background: linear-gradient(135deg, #10B981, #8B5CF6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .live-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: rgba(244, 63, 94, 0.2);
+      border: 1px solid rgba(244, 63, 94, 0.5);
+      color: #FB7185;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #F43F5E;
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      position: relative;
+    }
+    .video-container {
+      width: 100%;
+      max-width: 1200px;
+      aspect-ratio: 16 / 9;
+      background: #050709;
+      border-radius: 16px;
+      border: 1px solid #1F2937;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+    .overlay-message {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: rgba(9, 11, 14, 0.9);
+      padding: 24px;
+      text-align: center;
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      border: 3px solid rgba(139, 92, 246, 0.2);
+      border-top-color: #8B5CF6;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .room-bar {
+      margin-top: 16px;
+      width: 100%;
+      max-width: 1200px;
+      background: #0E1218;
+      border: 1px solid #1F2937;
+      border-radius: 12px;
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .input-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    input {
+      background: #171C26;
+      border: 1px solid #374151;
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus {
+      border-color: #8B5CF6;
+    }
+    button {
+      background: linear-gradient(135deg, #10B981, #8B5CF6);
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    .status-text {
+      font-size: 13px;
+      color: #9CA3AF;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo-badge">
+      <span class="logo-text">RAVIX STREAM</span>
+      <span class="live-badge" id="liveBadge" style="display: none;">
+        <span class="live-dot"></span> AO VIVO
+      </span>
+    </div>
+    <div class="status-text" id="headerStatus">Pronto para conectar</div>
+  </header>
+
+  <main>
+    <div class="video-container">
+      <video id="remoteVideo" autoplay playsinline controls></video>
+      <div class="overlay-message" id="overlay">
+        <div class="spinner" id="spinner"></div>
+        <h3 id="overlayTitle">Aguardando Conexão</h3>
+        <p id="overlayDesc" style="color: #9CA3AF; font-size: 14px;">Conectando-se à sala P2P do RAVIX...</p>
+      </div>
+    </div>
+
+    <div class="room-bar">
+      <div class="input-group">
+        <span style="font-size: 13px; color: #9CA3AF;">Sala:</span>
+        <input type="text" id="roomInput" placeholder="Código da sala" />
+        <button id="connectBtn" onclick="manualConnect()">Assistir</button>
+      </div>
+      <div style="font-size: 12px; color: #6B7280;" id="statsInfo">
+        Tecnologia WebRTC P2P • Tela Oasis
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    let targetRoom = urlParams.get("room") || "";
+    const roomInput = document.getElementById("roomInput");
+    const overlay = document.getElementById("overlay");
+    const overlayTitle = document.getElementById("overlayTitle");
+    const overlayDesc = document.getElementById("overlayDesc");
+    const spinner = document.getElementById("spinner");
+    const liveBadge = document.getElementById("liveBadge");
+    const headerStatus = document.getElementById("headerStatus");
+    const remoteVideo = document.getElementById("remoteVideo");
+
+    if (targetRoom) {
+      roomInput.value = targetRoom;
+    }
+
+    let peer = null;
+    let dataConn = null;
+
+    function initPeer(room) {
+      if (!room) return;
+      if (peer) {
+        peer.destroy();
+      }
+
+      overlay.style.display = "flex";
+      spinner.style.display = "block";
+      overlayTitle.innerText = "Conectando ao RAVIX";
+      overlayDesc.innerText = `Buscando sala: ${room}...`;
+      headerStatus.innerText = "Conectando...";
+
+      peer = new Peer({
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+          ]
+        }
+      });
+
+      peer.on("open", (myId) => {
+        console.log("Viewer peer ID:", myId);
+        headerStatus.innerText = `Conectado ao broker P2P`;
+        
+        // 1. Conecta via DataChannel para avisar o streamer que chegamos
+        dataConn = peer.connect(room, { reliable: true });
+
+        dataConn.on("open", () => {
+          console.log("Data connection open with host room");
+          overlayTitle.innerText = "Aguardando Transmissão";
+          overlayDesc.innerText = "Aguardando o streamer iniciar o compartilhamento de tela...";
+          headerStatus.innerText = `Conectado à sala ${room}`;
+        });
+
+        dataConn.on("data", (data) => {
+          if (data && data.type === "STREAM_STARTED") {
+            overlayTitle.innerText = "Recebendo Feed...";
+          }
+        });
+
+        dataConn.on("close", () => {
+          headerStatus.innerText = "Streamer desconectou";
+        });
+      });
+
+      // 2. Recebe a chamada de vídeo/áudio do streamer
+      peer.on("call", (mediaConn) => {
+        console.log("Recebendo chamada de mídia do streamer");
+        mediaConn.answer(); // Responde sem precisar de stream local do espectador
+
+        mediaConn.on("stream", (remoteStream) => {
+          console.log("Stream recebido com sucesso!", remoteStream);
+          remoteVideo.srcObject = remoteStream;
+          overlay.style.display = "none";
+          liveBadge.style.display = "inline-flex";
+          headerStatus.innerText = "Transmitindo em tempo real";
+          remoteVideo.play().catch(e => {
+            console.log("Autoplay bloqueado pelo navegador, necessita clique:", e);
+          });
+        });
+
+        mediaConn.on("close", () => {
+          overlay.style.display = "flex";
+          spinner.style.display = "none";
+          overlayTitle.innerText = "Transmissão Encerrada";
+          overlayDesc.innerText = "O streamer finalizou o compartilhamento.";
+          liveBadge.style.display = "none";
+        });
+      });
+
+      peer.on("error", (err) => {
+        console.error("PeerJS error:", err);
+        spinner.style.display = "none";
+        overlayTitle.innerText = "Erro na Sala";
+        overlayDesc.innerText = `Não foi possível conectar: ${err.type || err.message}`;
+        headerStatus.innerText = "Erro de conexão";
+      });
+    }
+
+    function manualConnect() {
+      const room = roomInput.value.trim();
+      if (room) {
+        initPeer(room);
+      }
+    }
+
+    if (targetRoom) {
+      initPeer(targetRoom);
+    } else {
+      spinner.style.display = "none";
+      overlayTitle.innerText = "Nenhuma Sala Definida";
+      overlayDesc.innerText = "Digite o código da sala abaixo e clique em 'Assistir'.";
+    }
+  </script>
+</body>
+</html>
