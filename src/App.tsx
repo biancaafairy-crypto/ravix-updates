@@ -1289,7 +1289,7 @@ export default function App() {
         </ErrorBoundary>
       ) : (
         /* ======================== ABA TRANSMISSÃO (MVP) ======================== */
-        <ErrorBoundary fallbackTitle="Transmissão P2P RAVIX">
+        <ErrorBoundary fallbackTitle="Transmissão RAVIX">
           <StreamView />
         </ErrorBoundary>
       )}

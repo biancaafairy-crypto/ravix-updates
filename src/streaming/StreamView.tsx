@@ -110,7 +110,7 @@ export function StreamView() {
     }
 
     setStreamStatus("creating_room");
-    setStatusMessage("Registrando sala no broker P2P...");
+    setStatusMessage("Iniciando sala de transmissão...");
 
     try {
       const peer = new Peer(roomId.trim(), {
@@ -127,7 +127,7 @@ export function StreamView() {
       peer.on("open", (id) => {
         hostPeerRef.current = peer;
         setStreamStatus("room_ready");
-        setStatusMessage(`Sala P2P aberta com ID: ${id}`);
+        setStatusMessage(`Sala aberta com ID: ${id}`);
       });
 
       // Quando um espectador se conecta via DataChannel
@@ -217,7 +217,7 @@ export function StreamView() {
 
       setMediaStream(stream);
       setStreamStatus("streaming");
-      setStatusMessage("Transmissão P2P ativa e compartilhando!");
+      setStatusMessage("Transmissão ativa e compartilhando!");
 
       // Enviar stream para todos os espectadores já conectados
       if (hostPeerRef.current) {
@@ -271,14 +271,14 @@ export function StreamView() {
     setStatusMessage("Sala encerrada.");
   };
 
-  // 5. Teste de Espectador em Loopback P2P (Requirement 4)
+  // 5. Teste Local de Transmissão
   const handleStartTestViewer = () => {
     if (testPeerRef.current) {
       testPeerRef.current.destroy();
       testPeerRef.current = null;
     }
 
-    setTestStatus("Conectando como espectador...");
+    setTestStatus("Conectando teste local...");
     const t0 = performance.now();
 
     try {
@@ -289,12 +289,12 @@ export function StreamView() {
         },
       });
 
-      viewerPeer.on("open", (id) => {
-        setTestStatus(`Espectador registrado (${id.slice(0, 8)}...). Conectando à sala...`);
+      viewerPeer.on("open", () => {
+        setTestStatus("Conectando à sua sala de transmissão...");
         const dataConn = viewerPeer.connect(roomId.trim(), { reliable: true });
 
         dataConn.on("open", () => {
-          setTestStatus("Conexão de dados aberta. Aguardando feed WebRTC...");
+          setTestStatus("Conexão estabelecida. Aguardando o vídeo...");
           setTestLatencyMs(Math.round(performance.now() - t0));
         });
 
@@ -305,12 +305,12 @@ export function StreamView() {
       });
 
       viewerPeer.on("call", (mediaConn) => {
-        setTestStatus("Recebendo chamada P2P do host... Respondendo...");
+        setTestStatus("Recebendo transmissão ao vivo...");
         mediaConn.answer();
 
         mediaConn.on("stream", (remoteStream) => {
           setTestStream(remoteStream);
-          setTestStatus("Feed P2P conectado e renderizando!");
+          setTestStatus("Transmissão ao vivo funcionando com sucesso!");
           setTestLatencyMs(Math.round(performance.now() - t0));
         });
 
@@ -377,9 +377,6 @@ export function StreamView() {
               <h1 className="text-base font-bold text-white tracking-wide">
                 TRANSMISSÃO AO VIVO
               </h1>
-              <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/30">
-                P2P • Tela Oasis
-              </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-2">
               <span>{statusMessage}</span>
@@ -423,7 +420,7 @@ export function StreamView() {
               className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 hover:opacity-90 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              Criar Sala P2P
+              Criar Sala de Transmissão
             </button>
           )}
         </div>
@@ -451,7 +448,7 @@ export function StreamView() {
                   Nenhuma transmissão de tela em andamento
                 </h3>
                 <p className="text-xs text-zinc-400 mb-5 leading-relaxed">
-                  Crie uma sala P2P e clique em <b>"Compartilhar Tela & Áudio"</b> para transmitir FiveM, GTA V ou qualquer tela para seus amigos com baixa latência estilo Tela Oasis / Discord.
+                  Crie uma sala e clique em <b>"Compartilhar Tela & Áudio"</b> para transmitir FiveM, GTA V ou qualquer janela para seus amigos com alta fluidez e sem atrasos.
                 </p>
                 {streamStatus === "room_ready" ? (
                   <button
@@ -467,7 +464,7 @@ export function StreamView() {
                     className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 text-white font-bold text-xs flex items-center gap-2 shadow-lg cursor-pointer hover:opacity-95"
                   >
                     <Radio className="h-4 w-4" />
-                    Abrir Sala de Transmissão
+                    Criar Sala de Transmissão
                   </button>
                 )}
               </div>
@@ -510,13 +507,13 @@ export function StreamView() {
             )}
           </div>
 
-          {/* ==================== TELA DE TESTE DE ESPECTADOR (LOOPBACK P2P) ==================== */}
+          {/* ==================== TELA DE TESTE DE ESPECTADOR ==================== */}
           <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Eye className="h-4 w-4 text-purple-400" />
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Tela de Teste • Feed do Espectador (Loopback P2P)
+                  Teste Local de Transmissão
                 </h3>
               </div>
               {!showTestViewer ? (
@@ -526,7 +523,7 @@ export function StreamView() {
                   className="px-3 py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
                   <Eye className="h-3.5 w-3.5" />
-                  Testar como Espectador no App
+                  Testar Transmissão no App
                 </button>
               ) : (
                 <button
@@ -548,7 +545,7 @@ export function StreamView() {
                   </span>
                   {testLatencyMs !== null && (
                     <span className="font-mono text-emerald-400 text-[11px]">
-                      Handshake P2P: {testLatencyMs}ms
+                      Latência: {testLatencyMs}ms
                     </span>
                   )}
                 </div>
@@ -564,14 +561,14 @@ export function StreamView() {
                   {!testStream && (
                     <div className="text-center p-4">
                       <div className="inline-block animate-spin h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2" />
-                      <p className="text-xs text-zinc-400">Aguardando fluxo WebRTC do host...</p>
+                      <p className="text-xs text-zinc-400">Aguardando início do vídeo...</p>
                     </div>
                   )}
                 </div>
               </div>
             ) : (
               <p className="text-xs text-zinc-500">
-                Abra o feed de teste para validar localmente que o WebRTC e o PeerJS estão transmitindo áudio e vídeo com sucesso de ponta a ponta antes de enviar para seus amigos.
+                Abra a visualização de teste para conferir se o áudio e o vídeo estão funcionando com perfeição antes de enviar o link para seus amigos.
               </p>
             )}
           </div>
@@ -579,12 +576,12 @@ export function StreamView() {
 
         {/* COLUNA DIREITA: CONFIGURAÇÕES DA SALA & COMPARTILHAMENTO (4 colunas) */}
         <div className="lg:col-span-4 flex flex-col gap-4">
-          {/* Card: Código da Sala e Conexão P2P */}
+          {/* Card: Código da Sala */}
           <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-4 shadow-xl">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
                 <Share2 className="h-4 w-4 text-emerald-400" />
-                Configuração da Sala P2P
+                Configuração da Sala
               </h2>
               {streamStatus !== "idle" && (
                 <span className="h-2 w-2 rounded-full bg-emerald-400" title="Sala Ativa" />
@@ -624,7 +621,7 @@ export function StreamView() {
                   className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 hover:opacity-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg cursor-pointer transition-all"
                 >
                   <Sparkles className="h-4 w-4" />
-                  Criar Sala P2P (Ativar Broker)
+                  Criar Sala de Transmissão
                 </button>
               ) : (
                 <button
@@ -709,7 +706,7 @@ export function StreamView() {
                         Amigo #{i + 1} ({spec.id.slice(0, 10)}...)
                       </span>
                     </div>
-                    <span className="text-[10px] text-zinc-500">P2P Direto</span>
+                    <span className="text-[10px] text-zinc-500">Conectado</span>
                   </div>
                 ))}
               </div>
@@ -720,10 +717,10 @@ export function StreamView() {
           <div className="p-3.5 rounded-2xl bg-[#0E1218]/50 border border-zinc-800/60 text-[11px] text-zinc-400 space-y-1">
             <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-              Arquitetura P2P Segura
+              Transmissão Direta e Privada
             </span>
             <p>
-              O vídeo e áudio trafegam diretamente entre você e seus amigos via WebRTC criptografado de ponta a ponta, sem intermediários gravando seu feed.
+              O vídeo e o áudio são transmitidos diretamente para seus amigos com conexão criptografada, sem intermediários ou gravações externas.
             </p>
           </div>
         </div>
