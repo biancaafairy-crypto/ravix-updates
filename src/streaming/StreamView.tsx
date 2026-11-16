@@ -9,7 +9,6 @@ import {
   Play,
   Square,
   ExternalLink,
-  RefreshCw,
   ShieldCheck,
   Activity,
   Volume2,
@@ -17,6 +16,8 @@ import {
   Eye,
   Share2,
   Sparkles,
+  Zap,
+  Loader2,
 } from "lucide-react";
 import type { StreamStatus, StreamTelemetry, SpectatorPeer } from "./types";
 
@@ -30,10 +31,10 @@ function generateRoomId(): string {
 }
 
 export function StreamView() {
-  // Configuração da Sala
-  const [roomId, setRoomId] = useState<string>(() => generateRoomId());
+  // Estado de Inicialização do Host: Inicia OCIOSO ("idle"), sem chave gerada previamente
+  const [roomId, setRoomId] = useState<string>("");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("idle");
-  const [statusMessage, setStatusMessage] = useState<string>("Sala não inicializada");
+  const [statusMessage, setStatusMessage] = useState<string>("Pronto para criar uma sala");
 
   // Mídia & Captura
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
@@ -56,7 +57,7 @@ export function StreamView() {
     bitrateEstimateKbps: 0,
   });
 
-  // Tela de Teste de Espectador (Loopback P2P)
+  // Tela de Teste de Espectador (Loopback Local)
   const [showTestViewer, setShowTestViewer] = useState(false);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [testStatus, setTestStatus] = useState<string>("Desconectado");
@@ -102,18 +103,39 @@ export function StreamView() {
     }
   }, [testStream]);
 
-  // 1. Criar Sala P2P (Host)
+  // Limpeza ao desmontar componente
+  useEffect(() => {
+    return () => {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+      }
+      if (hostPeerRef.current) {
+        hostPeerRef.current.destroy();
+        hostPeerRef.current = null;
+      }
+      if (testPeerRef.current) {
+        testPeerRef.current.destroy();
+        testPeerRef.current = null;
+      }
+      activeConnectionsRef.current.clear();
+    };
+  }, [mediaStream]);
+
+  // 1. Criar Sala de Transmissão (Ação explícita do Host)
   const handleCreateRoom = useCallback(() => {
     if (hostPeerRef.current) {
       hostPeerRef.current.destroy();
       hostPeerRef.current = null;
     }
 
+    // Geração dinâmica e sob demanda da chave da sala
+    const newRoomId = generateRoomId();
+    setRoomId(newRoomId);
     setStreamStatus("creating_room");
     setStatusMessage("Iniciando sala de transmissão...");
 
     try {
-      const peer = new Peer(roomId.trim(), {
+      const peer = new Peer(newRoomId.trim(), {
         debug: 1,
         config: {
           iceServers: [
@@ -127,7 +149,7 @@ export function StreamView() {
       peer.on("open", (id) => {
         hostPeerRef.current = peer;
         setStreamStatus("room_ready");
-        setStatusMessage(`Sala aberta com ID: ${id}`);
+        setStatusMessage(`Sala pronta: ${id}`);
       });
 
       // Quando um espectador se conecta via DataChannel
@@ -146,11 +168,23 @@ export function StreamView() {
             status: streamStatus === "streaming" ? "STREAMING" : "READY",
           });
 
-          // Se já estiver transmitindo tela, liga para o novo espectador imediatamente!
+          // Se já estiver transmitindo tela, liga para o novo espectador imediatamente
           if (mediaStream) {
             const call = peer.call(peerId, mediaStream);
             const entry = activeConnectionsRef.current.get(peerId);
             if (entry) entry.mediaConn = call;
+          }
+        });
+
+        dataConn.on("data", (data: any) => {
+          // Recepção do apelido do espectador enviado pelo modal do watch.html
+          if (data && typeof data === "object") {
+            if (data.type === "SPECTATOR_JOIN" && data.name) {
+              const displayName = String(data.name).trim().slice(0, 30);
+              setSpectators((prev) =>
+                prev.map((s) => (s.id === peerId ? { ...s, name: displayName } : s))
+              );
+            }
           }
         });
 
@@ -165,7 +199,7 @@ export function StreamView() {
         });
       });
 
-      // Se um espectador ligar para o host
+      // Se um espectador solicitar chamada
       peer.on("call", (mediaConn) => {
         if (mediaStream) {
           mediaConn.answer(mediaStream);
@@ -173,15 +207,15 @@ export function StreamView() {
       });
 
       peer.on("error", (err) => {
-        console.error("Erro no PeerJS Host:", err);
+        console.error("Erro no Host:", err);
         setStreamStatus("error");
         setStatusMessage(`Falha na sala: ${err.type || err.message}`);
       });
     } catch (err: any) {
       setStreamStatus("error");
-      setStatusMessage(`Erro ao instanciar sala: ${err?.message || String(err)}`);
+      setStatusMessage(`Erro ao inicializar sala: ${err?.message || String(err)}`);
     }
-  }, [roomId, mediaStream, streamStatus]);
+  }, [mediaStream, streamStatus]);
 
   // 2. Iniciar Captura de Tela (getDisplayMedia)
   const handleStartCapture = async () => {
@@ -193,10 +227,9 @@ export function StreamView() {
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },
-        audio: true, // Captura o áudio do sistema/jogo!
+        audio: true, // Captura áudio do sistema/jogo integrado
       });
 
-      // Extrair dimensões reais do vídeo
       const videoTrack = stream.getVideoTracks()[0];
       const audioTrack = stream.getAudioTracks()[0];
 
@@ -219,7 +252,7 @@ export function StreamView() {
       setStreamStatus("streaming");
       setStatusMessage("Transmissão ativa e compartilhando!");
 
-      // Enviar stream para todos os espectadores já conectados
+      // Enviar fluxo de vídeo/áudio para todos os espectadores conectados
       if (hostPeerRef.current) {
         activeConnectionsRef.current.forEach((connData, peerId) => {
           try {
@@ -227,7 +260,7 @@ export function StreamView() {
             connData.mediaConn = call;
             connData.dataConn.send({ type: "STREAM_STARTED" });
           } catch (e) {
-            console.error(`Erro ao ligar para ${peerId}:`, e);
+            console.error(`Erro ao enviar stream para ${peerId}:`, e);
           }
         });
       }
@@ -250,7 +283,6 @@ export function StreamView() {
     setStreamStatus(hostPeerRef.current ? "room_ready" : "idle");
     setStatusMessage("Compartilhamento de tela finalizado.");
 
-    // Notificar espectadores
     activeConnectionsRef.current.forEach(({ dataConn }) => {
       try {
         dataConn.send({ type: "STREAM_STOPPED" });
@@ -258,21 +290,24 @@ export function StreamView() {
     });
   };
 
-  // 4. Fechar Sala
+  // 4. Fechar Sala e Retornar ao Estado Ocioso ("Idle")
   const handleCloseRoom = () => {
     handleStopCapture();
     if (hostPeerRef.current) {
       hostPeerRef.current.destroy();
       hostPeerRef.current = null;
     }
+    handleStopTestViewer();
     activeConnectionsRef.current.clear();
     setSpectators([]);
+    setRoomId(""); // Limpa o ID da sala para não vazar estado anterior
     setStreamStatus("idle");
-    setStatusMessage("Sala encerrada.");
+    setStatusMessage("Pronto para criar uma sala");
   };
 
-  // 5. Teste Local de Transmissão
+  // 5. Teste Local de Transmissão (Loopback no App)
   const handleStartTestViewer = () => {
+    if (!roomId) return;
     if (testPeerRef.current) {
       testPeerRef.current.destroy();
       testPeerRef.current = null;
@@ -321,7 +356,7 @@ export function StreamView() {
       });
 
       viewerPeer.on("error", (err) => {
-        setTestStatus(`Erro no espectador: ${err.type || err.message}`);
+        setTestStatus(`Erro no teste: ${err.type || err.message}`);
       });
 
       testPeerRef.current = viewerPeer;
@@ -341,17 +376,23 @@ export function StreamView() {
     setTestStatus("Desconectado");
   };
 
-  // Links de compartilhamento
-  const viewerWebUrl = `https://ivyfated.github.io/ravix-updates/watch.html?room=${encodeURIComponent(roomId)}`;
-  const localWebUrl = `http://localhost:5173/watch.html?room=${encodeURIComponent(roomId)}`;
+  // URLs formatadas para os espectadores (geradas apenas quando roomId existir)
+  const viewerWebUrl = roomId
+    ? `https://ivyfated.github.io/ravix-updates/watch.html?room=${encodeURIComponent(roomId)}`
+    : "";
+  const localWebUrl = roomId
+    ? `http://localhost:5173/watch.html?room=${encodeURIComponent(roomId)}`
+    : "";
 
   const handleCopyLink = () => {
+    if (!viewerWebUrl) return;
     navigator.clipboard.writeText(viewerWebUrl);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
   const handleCopyCode = () => {
+    if (!roomId) return;
     navigator.clipboard.writeText(roomId);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
@@ -364,9 +405,11 @@ export function StreamView() {
     return `${hrs.toString().padStart(2, "0")}:${(mins % 60).toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const isIdle = streamStatus === "idle" || streamStatus === "creating_room";
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[#090B0E] text-zinc-100 overflow-y-auto p-4 md:p-6 gap-5">
-      {/* ==================== BARRA SUPERIOR DA TRANSMISSÃO ==================== */}
+      {/* ==================== BARRA SUPERIOR ==================== */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-[#0E1218] border border-zinc-800 shadow-xl">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-gradient-to-br from-rose-500/20 to-purple-500/20 border border-rose-500/30 text-rose-400">
@@ -377,354 +420,411 @@ export function StreamView() {
               <h1 className="text-base font-bold text-white tracking-wide">
                 TRANSMISSÃO AO VIVO
               </h1>
+              {streamStatus === "streaming" && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
+                  AO VIVO
+                </span>
+              )}
             </div>
-            <p className="text-xs text-zinc-400 mt-0.5 flex items-center gap-2">
+            <p className="text-xs text-zinc-400 mt-0.5">
               <span>{statusMessage}</span>
             </p>
           </div>
         </div>
 
-        {/* Badges de Status / Espectadores / Timer */}
-        <div className="flex items-center gap-3">
-          {streamStatus === "streaming" && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 font-bold text-xs animate-pulse">
-              <span className="h-2 w-2 rounded-full bg-rose-500" />
-              <span>AO VIVO • {formatElapsed(telemetry.elapsedSecs)}</span>
+        {/* Controles de Ação no Topo (Apenas quando NÃO estiver ocioso) */}
+        {!isIdle && (
+          <div className="flex items-center gap-3">
+            {streamStatus === "streaming" && (
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 font-bold text-xs animate-pulse">
+                <span className="h-2 w-2 rounded-full bg-rose-500" />
+                <span>AO VIVO • {formatElapsed(telemetry.elapsedSecs)}</span>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#121620] border border-zinc-800 text-xs font-semibold text-zinc-300">
+              <Users className="h-3.5 w-3.5 text-purple-400" />
+              <span>{spectators.length} {spectators.length === 1 ? "espectador" : "espectadores"}</span>
             </div>
-          )}
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#121620] border border-zinc-800 text-xs font-semibold text-zinc-300">
-            <Users className="h-3.5 w-3.5 text-purple-400" />
-            <span>{spectators.length} {spectators.length === 1 ? "espectador" : "espectadores"}</span>
+            {streamStatus === "streaming" ? (
+              <button
+                onClick={handleStopCapture}
+                className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
+              >
+                <Square className="h-3.5 w-3.5 fill-current" />
+                Parar Transmissão
+              </button>
+            ) : (
+              <button
+                onClick={handleStartCapture}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-rose-500 hover:opacity-90 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
+              >
+                <Play className="h-3.5 w-3.5 fill-current" />
+                Compartilhar Tela & Áudio
+              </button>
+            )}
+
+            <button
+              onClick={handleCloseRoom}
+              className="px-3 py-1.5 rounded-xl bg-[#171C26] hover:bg-red-500/20 hover:text-red-300 border border-zinc-800 text-zinc-300 font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              title="Encerrar sessão da sala"
+            >
+              <Square className="h-3 w-3" />
+              Fechar Sala
+            </button>
           </div>
-
-          {streamStatus === "streaming" ? (
-            <button
-              onClick={handleStopCapture}
-              className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
-            >
-              <Square className="h-3.5 w-3.5 fill-current" />
-              Parar Transmissão
-            </button>
-          ) : streamStatus === "room_ready" ? (
-            <button
-              onClick={handleStartCapture}
-              className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-emerald-500 to-rose-500 hover:opacity-90 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
-            >
-              <Play className="h-3.5 w-3.5 fill-current" />
-              Compartilhar Tela & Áudio
-            </button>
-          ) : (
-            <button
-              onClick={handleCreateRoom}
-              className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 hover:opacity-90 text-white font-bold text-xs flex items-center gap-2 transition-all shadow-lg cursor-pointer"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              Criar Sala de Transmissão
-            </button>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* ==================== CORPO PRINCIPAL ==================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
-        {/* COLUNA ESQUERDA: PREVIEW PRINCIPAL & RETORNO DO STREAMER (8 colunas) */}
-        <div className="lg:col-span-8 flex flex-col gap-4">
-          <div className="relative aspect-video rounded-2xl bg-[#050709] border border-zinc-800 overflow-hidden shadow-2xl flex items-center justify-center group">
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className={`w-full h-full object-contain ${!mediaStream ? "hidden" : ""}`}
-            />
+      {/* ==================== ESTADO 1: INICIALIZAÇÃO OCIOSA (IDLE CTA LIMPO) ==================== */}
+      {isIdle ? (
+        <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-[460px]">
+          <div className="max-w-xl w-full flex flex-col items-center text-center p-8 md:p-12 rounded-3xl bg-gradient-to-b from-[#0E1218] to-[#0A0D12] border border-zinc-800/80 shadow-2xl relative overflow-hidden">
+            {/* Brilho decorativo no fundo */}
+            <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 w-80 h-80 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            {!mediaStream && (
-              <div className="flex flex-col items-center justify-center p-8 text-center max-w-md">
-                <div className="p-4 rounded-2xl bg-[#121620] border border-zinc-800 text-zinc-500 mb-4">
-                  <Tv className="h-10 w-10 text-purple-400/80" />
+            {/* Ícone Hero */}
+            <div className="relative mb-6">
+              <div className="p-5 rounded-2xl bg-[#121620] border border-purple-500/30 text-purple-400 shadow-xl shadow-purple-950/20">
+                <Radio className="h-10 w-10 text-rose-400" />
+              </div>
+              <span className="absolute -bottom-1 -right-1 p-1 rounded-full bg-emerald-500 text-black">
+                <Sparkles className="h-3 w-3 fill-current" />
+              </span>
+            </div>
+
+            {/* Texto de Boas-Vindas */}
+            <h2 className="text-xl md:text-2xl font-extrabold text-white tracking-tight mb-2">
+              Transmissão ao Vivo para Amigos
+            </h2>
+            <p className="text-xs md:text-sm text-zinc-400 mb-8 max-w-md leading-relaxed">
+              Transmita FiveM, GTA V ou qualquer janela diretamente para seus amigos em tempo real com áudio integrado do sistema e sem atrasos.
+            </p>
+
+            {/* Botão de Chamada para Ação Principal (CTA) */}
+            <button
+              onClick={handleCreateRoom}
+              disabled={streamStatus === "creating_room"}
+              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 via-rose-600 to-emerald-600 hover:opacity-95 text-white font-extrabold text-sm flex items-center justify-center gap-3 shadow-xl shadow-purple-900/30 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+            >
+              {streamStatus === "creating_room" ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <span>Criando Sala de Transmissão...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="h-4 w-4 fill-current" />
+                  <span>Criar Sala de Transmissão</span>
+                </>
+              )}
+            </button>
+
+            {/* Destaques Técnicos Nativos */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full mt-10 pt-8 border-t border-zinc-800/80 text-left">
+              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
+                <div className="flex items-center gap-2 text-rose-400 font-bold text-xs mb-1">
+                  <Zap className="h-3.5 w-3.5" />
+                  60 FPS Estáveis
                 </div>
-                <h3 className="text-base font-bold text-white mb-1">
-                  Nenhuma transmissão de tela em andamento
-                </h3>
-                <p className="text-xs text-zinc-400 mb-5 leading-relaxed">
-                  Crie uma sala e clique em <b>"Compartilhar Tela & Áudio"</b> para transmitir FiveM, GTA V ou qualquer janela para seus amigos com alta fluidez e sem atrasos.
+                <p className="text-[11px] text-zinc-400 leading-snug">
+                  Transmissão com alta taxa de quadros e baixa latência.
                 </p>
-                {streamStatus === "room_ready" ? (
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
+                <div className="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
+                  <Volume2 className="h-3.5 w-3.5" />
+                  Áudio Integrado
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-snug">
+                  Som do jogo e microfone capturados sem eco.
+                </p>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
+                <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs mb-1">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  Privado e Direto
+                </div>
+                <p className="text-[11px] text-zinc-400 leading-snug">
+                  Conexão criptografada sem servidores intermediários.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* ==================== ESTADO 2: SESSÃO ATIVA (ACTIVE DASHBOARD) ==================== */
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
+          {/* COLUNA ESQUERDA: PREVIEW PRINCIPAL & RETORNO DO STREAMER (8 colunas) */}
+          <div className="lg:col-span-8 flex flex-col gap-4">
+            <div className="relative aspect-video rounded-2xl bg-[#050709] border border-zinc-800 overflow-hidden shadow-2xl flex items-center justify-center group">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className={`w-full h-full object-contain ${!mediaStream ? "hidden" : ""}`}
+              />
+
+              {!mediaStream && (
+                <div className="flex flex-col items-center justify-center p-8 text-center max-w-md">
+                  <div className="p-4 rounded-2xl bg-[#121620] border border-zinc-800 text-zinc-500 mb-4">
+                    <Tv className="h-10 w-10 text-purple-400/80" />
+                  </div>
+                  <h3 className="text-base font-bold text-white mb-1">
+                    Sala pronta para transmitir
+                  </h3>
+                  <p className="text-xs text-zinc-400 mb-5 leading-relaxed">
+                    Clique no botão abaixo para escolher a janela do FiveM, jogo ou monitor completo para iniciar o envio de vídeo e som.
+                  </p>
                   <button
                     onClick={handleStartCapture}
                     className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-rose-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg cursor-pointer hover:opacity-95"
                   >
                     <Play className="h-4 w-4 fill-current" />
-                    Iniciar Compartilhamento de Tela
+                    Compartilhar Tela & Áudio
+                  </button>
+                </div>
+              )}
+
+              {/* Overlay de Telemetria sobre o Player */}
+              {mediaStream && (
+                <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 pointer-events-none">
+                  <span className="px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px] font-mono text-emerald-400 flex items-center gap-1.5">
+                    <Activity className="h-3 w-3" />
+                    {telemetry.width}x{telemetry.height} @ {telemetry.fps} FPS
+                  </span>
+                  <span className="px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px] font-mono text-purple-300 flex items-center gap-1.5">
+                    {telemetry.hasAudio ? (
+                      <>
+                        <Volume2 className="h-3 w-3 text-emerald-400" />
+                        Áudio do Jogo Ativo
+                      </>
+                    ) : (
+                      <>
+                        <VolumeX className="h-3 w-3 text-zinc-500" />
+                        Sem Áudio
+                      </>
+                    )}
+                  </span>
+                </div>
+              )}
+
+              {/* Controles de overlay no hover */}
+              {mediaStream && (
+                <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/80 backdrop-blur-md p-1.5 rounded-xl border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => setIsAudioMuted(!isAudioMuted)}
+                    className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white"
+                    title={isAudioMuted ? "Desmutar prévia local" : "Mutar prévia local"}
+                  >
+                    {isAudioMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* ==================== TELA DE TESTE DE ESPECTADOR ==================== */}
+            <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-purple-400" />
+                  <h3 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Teste Local de Transmissão
+                  </h3>
+                </div>
+                {!showTestViewer ? (
+                  <button
+                    onClick={handleStartTestViewer}
+                    className="px-3 py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    Testar Transmissão no App
                   </button>
                 ) : (
                   <button
-                    onClick={handleCreateRoom}
-                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 text-white font-bold text-xs flex items-center gap-2 shadow-lg cursor-pointer hover:opacity-95"
+                    onClick={handleStopTestViewer}
+                    className="px-3 py-1 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Radio className="h-4 w-4" />
-                    Criar Sala de Transmissão
+                    <Square className="h-3.5 w-3.5 fill-current" />
+                    Fechar Teste
                   </button>
                 )}
               </div>
-            )}
 
-            {/* Overlay de Telemetria sobre o Player */}
-            {mediaStream && (
-              <div className="absolute top-3 left-3 flex flex-wrap items-center gap-2 pointer-events-none">
-                <span className="px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px] font-mono text-emerald-400 flex items-center gap-1.5">
-                  <Activity className="h-3 w-3" />
-                  {telemetry.width}x{telemetry.height} @ {telemetry.fps} FPS
-                </span>
-                <span className="px-2.5 py-1 rounded-lg bg-black/75 backdrop-blur-md border border-white/10 text-[11px] font-mono text-purple-300 flex items-center gap-1.5">
-                  {telemetry.hasAudio ? (
-                    <>
-                      <Volume2 className="h-3 w-3 text-emerald-400" />
-                      Áudio do Jogo Ativo
-                    </>
-                  ) : (
-                    <>
-                      <VolumeX className="h-3 w-3 text-zinc-500" />
-                      Sem Áudio
-                    </>
-                  )}
-                </span>
-              </div>
-            )}
+              {showTestViewer ? (
+                <div className="space-y-2 pt-2 border-t border-zinc-800">
+                  <div className="flex items-center justify-between text-xs text-zinc-400">
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                      Status: <b className="text-zinc-200">{testStatus}</b>
+                    </span>
+                    {testLatencyMs !== null && (
+                      <span className="font-mono text-emerald-400 text-[11px]">
+                        Latência: {testLatencyMs}ms
+                      </span>
+                    )}
+                  </div>
 
-            {/* Controles de overlay no hover */}
-            {mediaStream && (
-              <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/80 backdrop-blur-md p-1.5 rounded-xl border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => setIsAudioMuted(!isAudioMuted)}
-                  className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white"
-                  title={isAudioMuted ? "Desmutar prévia local" : "Mutar prévia local"}
-                >
-                  {isAudioMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
-                </button>
-              </div>
-            )}
+                  <div className="relative aspect-video max-h-72 w-full rounded-xl bg-black border border-purple-500/30 overflow-hidden flex items-center justify-center shadow-inner">
+                    <video
+                      ref={testVideoRef}
+                      autoPlay
+                      playsInline
+                      controls
+                      className={`w-full h-full object-contain ${!testStream ? "hidden" : ""}`}
+                    />
+                    {!testStream && (
+                      <div className="text-center p-4">
+                        <div className="inline-block animate-spin h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2" />
+                        <p className="text-xs text-zinc-400">Aguardando início do vídeo...</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-500">
+                  Abra a visualização de teste para conferir se o áudio e o vídeo estão funcionando com perfeição antes de enviar o link para seus amigos.
+                </p>
+              )}
+            </div>
           </div>
 
-          {/* ==================== TELA DE TESTE DE ESPECTADOR ==================== */}
-          <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Eye className="h-4 w-4 text-purple-400" />
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Teste Local de Transmissão
+          {/* COLUNA DIREITA: CONFIGURAÇÕES DA SALA & COMPARTILHAMENTO (4 colunas) */}
+          <div className="lg:col-span-4 flex flex-col gap-4">
+            {/* Card: Dados da Sala Ativa */}
+            <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-4 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                  <Share2 className="h-4 w-4 text-emerald-400" />
+                  Sala Ativa
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  ONLINE
+                </span>
+              </div>
+
+              {/* Código da Sala */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-zinc-400">
+                  Código da Sala
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={roomId}
+                    className="flex-1 rounded-xl border border-zinc-800 bg-[#121620] px-3 py-2 text-xs font-mono font-bold text-white select-all"
+                  />
+                  <button
+                    onClick={handleCopyCode}
+                    className="p-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 transition-colors cursor-pointer"
+                    title="Copiar Código da Sala"
+                  >
+                    {copiedCode ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Link do Player para Espectadores */}
+              <div className="space-y-2 pt-2 border-t border-zinc-800/80">
+                <label className="text-[11px] font-semibold text-zinc-400">
+                  Link para Amigos Assistirem
+                </label>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={viewerWebUrl}
+                    className="flex-1 rounded-xl border border-zinc-800 bg-[#121620] px-3 py-2 text-[11px] font-mono text-zinc-400 truncate select-all"
+                  />
+                  <button
+                    onClick={handleCopyLink}
+                    className="p-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 transition-colors cursor-pointer"
+                    title="Copiar Link"
+                  >
+                    {copiedLink ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <button
+                    onClick={handleCopyLink}
+                    className="py-1.5 px-3 rounded-lg bg-[#121620] hover:bg-[#1A1F2C] border border-zinc-800 text-[11px] font-medium text-zinc-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Share2 className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>Compartilhar</span>
+                  </button>
+
+                  <a
+                    href={localWebUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="py-1.5 px-3 rounded-lg bg-[#121620] hover:bg-[#1A1F2C] border border-zinc-800 text-[11px] font-medium text-zinc-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 text-purple-400" />
+                    <span>Abrir Web</span>
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Card: Lista de Espectadores Conectados */}
+            <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3 shadow-xl">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                  <Users className="h-4 w-4 text-purple-400" />
+                  Espectadores Conectados ({spectators.length})
                 </h3>
               </div>
-              {!showTestViewer ? (
-                <button
-                  onClick={handleStartTestViewer}
-                  disabled={streamStatus === "idle"}
-                  className="px-3 py-1 rounded-lg bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/40 text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                >
-                  <Eye className="h-3.5 w-3.5" />
-                  Testar Transmissão no App
-                </button>
+
+              {spectators.length === 0 ? (
+                <div className="py-6 text-center text-xs text-zinc-500 border border-dashed border-zinc-800/80 rounded-xl">
+                  Nenhum amigo conectado no momento.
+                  <br />
+                  Envie o link para começarem a assistir.
+                </div>
               ) : (
-                <button
-                  onClick={handleStopTestViewer}
-                  className="px-3 py-1 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Square className="h-3.5 w-3.5 fill-current" />
-                  Fechar Teste
-                </button>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {spectators.map((spec, i) => (
+                    <div
+                      key={spec.id}
+                      className="flex items-center justify-between p-2.5 rounded-xl bg-[#121620] border border-zinc-800/60 text-xs"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                        <span className="font-medium text-zinc-200">
+                          {spec.name ? spec.name : `Amigo #${i + 1}`}
+                        </span>
+                        <span className="font-mono text-[10px] text-zinc-500">
+                          ({spec.id.slice(0, 8)})
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 font-semibold">Online</span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
-            {showTestViewer ? (
-              <div className="space-y-2 pt-2 border-t border-zinc-800">
-                <div className="flex items-center justify-between text-xs text-zinc-400">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Status: <b className="text-zinc-200">{testStatus}</b>
-                  </span>
-                  {testLatencyMs !== null && (
-                    <span className="font-mono text-emerald-400 text-[11px]">
-                      Latência: {testLatencyMs}ms
-                    </span>
-                  )}
-                </div>
-
-                <div className="relative aspect-video max-h-72 w-full rounded-xl bg-black border border-purple-500/30 overflow-hidden flex items-center justify-center shadow-inner">
-                  <video
-                    ref={testVideoRef}
-                    autoPlay
-                    playsInline
-                    controls
-                    className={`w-full h-full object-contain ${!testStream ? "hidden" : ""}`}
-                  />
-                  {!testStream && (
-                    <div className="text-center p-4">
-                      <div className="inline-block animate-spin h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2" />
-                      <p className="text-xs text-zinc-400">Aguardando início do vídeo...</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-zinc-500">
-                Abra a visualização de teste para conferir se o áudio e o vídeo estão funcionando com perfeição antes de enviar o link para seus amigos.
+            {/* Dica de Segurança e Privacidade */}
+            <div className="p-3.5 rounded-2xl bg-[#0E1218]/50 border border-zinc-800/60 text-[11px] text-zinc-400 space-y-1">
+              <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                Transmissão Direta e Privada
+              </span>
+              <p>
+                O vídeo e o áudio são transmitidos diretamente para seus amigos com conexão criptografada, sem intermediários ou gravações externas.
               </p>
-            )}
+            </div>
           </div>
         </div>
-
-        {/* COLUNA DIREITA: CONFIGURAÇÕES DA SALA & COMPARTILHAMENTO (4 colunas) */}
-        <div className="lg:col-span-4 flex flex-col gap-4">
-          {/* Card: Código da Sala */}
-          <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                <Share2 className="h-4 w-4 text-emerald-400" />
-                Configuração da Sala
-              </h2>
-              {streamStatus !== "idle" && (
-                <span className="h-2 w-2 rounded-full bg-emerald-400" title="Sala Ativa" />
-              )}
-            </div>
-
-            {/* Input do Código da Sala */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-zinc-400">
-                Código / ID da Sala
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={roomId}
-                  disabled={streamStatus === "streaming"}
-                  onChange={(e) => setRoomId(e.target.value.toUpperCase())}
-                  className="flex-1 rounded-xl border border-zinc-800 bg-[#121620] px-3 py-2 text-xs font-mono font-bold text-white focus:outline-none focus:border-purple-500 disabled:opacity-50"
-                  placeholder="EX: RAVIX-ALPHA"
-                />
-                <button
-                  onClick={() => setRoomId(generateRoomId())}
-                  disabled={streamStatus === "streaming"}
-                  className="p-2 rounded-xl bg-[#171C26] hover:bg-[#1E2430] border border-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
-                  title="Gerar outro ID aleatório"
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {/* Ações da Sala */}
-            <div className="pt-1 flex flex-col gap-2">
-              {streamStatus === "idle" ? (
-                <button
-                  onClick={handleCreateRoom}
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-rose-600 hover:opacity-95 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg cursor-pointer transition-all"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  Criar Sala de Transmissão
-                </button>
-              ) : (
-                <button
-                  onClick={handleCloseRoom}
-                  className="w-full py-2 rounded-xl bg-[#171C26] hover:bg-red-500/20 hover:text-red-300 border border-zinc-800 text-zinc-300 font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  <Square className="h-3.5 w-3.5" />
-                  Fechar Sala
-                </button>
-              )}
-            </div>
-
-            {/* Link de Compartilhamento com Amigos */}
-            <div className="space-y-2 pt-2 border-t border-zinc-800/80">
-              <label className="text-[11px] font-semibold text-zinc-400 flex items-center justify-between">
-                <span>Link do Player para Espectadores</span>
-              </label>
-
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={viewerWebUrl}
-                  className="flex-1 rounded-xl border border-zinc-800 bg-[#121620] px-3 py-2 text-[11px] font-mono text-zinc-400 truncate select-all"
-                />
-                <button
-                  onClick={handleCopyLink}
-                  className="p-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/40 text-purple-300 transition-colors cursor-pointer"
-                  title="Copiar Link"
-                >
-                  {copiedLink ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                </button>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  onClick={handleCopyCode}
-                  className="py-1.5 px-3 rounded-lg bg-[#121620] hover:bg-[#1A1F2C] border border-zinc-800 text-[11px] font-medium text-zinc-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  {copiedCode ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
-                  <span>Copiar ID da Sala</span>
-                </button>
-
-                <a
-                  href={localWebUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="py-1.5 px-3 rounded-lg bg-[#121620] hover:bg-[#1A1F2C] border border-zinc-800 text-[11px] font-medium text-zinc-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <ExternalLink className="h-3.5 w-3.5 text-purple-400" />
-                  <span>Abrir no Browser</span>
-                </a>
-              </div>
-            </div>
-          </div>
-
-          {/* Card: Lista de Espectadores Conectados */}
-          <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3 shadow-xl">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-                <Users className="h-4 w-4 text-purple-400" />
-                Espectadores ({spectators.length})
-              </h3>
-            </div>
-
-            {spectators.length === 0 ? (
-              <div className="py-6 text-center text-xs text-zinc-500 border border-dashed border-zinc-800/80 rounded-xl">
-                Nenhum amigo conectado no momento.
-                <br />
-                Envie o link ou código da sala para começar.
-              </div>
-            ) : (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {spectators.map((spec, i) => (
-                  <div
-                    key={spec.id}
-                    className="flex items-center justify-between p-2.5 rounded-xl bg-[#121620] border border-zinc-800/60 text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                      <span className="font-mono text-zinc-200">
-                        Amigo #{i + 1} ({spec.id.slice(0, 10)}...)
-                      </span>
-                    </div>
-                    <span className="text-[10px] text-zinc-500">Conectado</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Dica Rápida */}
-          <div className="p-3.5 rounded-2xl bg-[#0E1218]/50 border border-zinc-800/60 text-[11px] text-zinc-400 space-y-1">
-            <span className="font-semibold text-zinc-200 flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-              Transmissão Direta e Privada
-            </span>
-            <p>
-              O vídeo e o áudio são transmitidos diretamente para seus amigos com conexão criptografada, sem intermediários ou gravações externas.
-            </p>
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

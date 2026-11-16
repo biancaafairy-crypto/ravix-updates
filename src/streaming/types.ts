@@ -12,6 +12,7 @@ export interface StreamTelemetry {
 
 export interface SpectatorPeer {
   id: string;
+  name?: string;
   connectedAt: number;
   latencyMs?: number;
 }
