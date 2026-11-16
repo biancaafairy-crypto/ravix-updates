@@ -4,6 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   Activity,
   AlertTriangle,
@@ -393,6 +394,16 @@ export default function App() {
           setUpdateStatus("downloaded");
         }
       });
+
+      setUpdateStatus("downloaded");
+      // Reiniciar o aplicativo de forma autônoma após 1.5s para concluir a instalação
+      setTimeout(async () => {
+        try {
+          await relaunch();
+        } catch (relaunchErr) {
+          console.error("Falha ao reiniciar automaticamente:", relaunchErr);
+        }
+      }, 1500);
     } catch (err) {
       console.error("Falha ao instalar atualização:", err);
       setUpdateError(String(err));
@@ -1758,9 +1769,24 @@ export default function App() {
                     )}
 
                     {updateStatus === "downloaded" && (
-                      <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/40 text-xs text-emerald-200 flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                        <span>Atualização baixada! O RAVIX será reiniciado automaticamente para concluir a instalação.</span>
+                      <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/40 text-xs text-emerald-200 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+                          <span>Atualização baixada e pronta! Reiniciando o RAVIX...</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await relaunch();
+                            } catch (e) {
+                              console.error(e);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs shrink-0 cursor-pointer transition-colors"
+                        >
+                          Reiniciar Agora
+                        </button>
                       </div>
                     )}
                   </div>
