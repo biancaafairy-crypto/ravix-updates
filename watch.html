@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAVIX Live — Transmissão ao Vivo</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    :root {
+      --bg-base: #090B0E;
+      --bg-card: #0E1218;
+      --bg-elevated: #121620;
+      --border-color: #1F2937;
+      --border-focus: #8B5CF6;
+      --accent-purple: #8B5CF6;
+      --accent-rose: #F43F5E;
+      --accent-emerald: #10B981;
+      --text-main: #F3F4F6;
+      --text-muted: #9CA3AF;
+      --text-dim: #6B7280;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    }
+
+    body {
+      background: var(--bg-base);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* ==================== CABEÇALHO GLOBAL ==================== */
+    header {
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border-color);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+    }
+
+    .brand-logo {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #10B981, #8B5CF6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      color: #000;
+      font-size: 16px;
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+    }
+
+    .brand-title {
+      font-size: 17px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      color: #FFF;
+    }
+
+    .brand-title span {
+      background: linear-gradient(135deg, #10B981, #A855F7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .badge-room {
+      font-family: monospace;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      color: #D1D5DB;
+    }
+
+    .live-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.4);
+      color: #FB7185;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-rose);
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    /* ==================== INTERSTITIAL GATE (TELA DE BOAS-VINDAS) ==================== */
+    #interstitialGate {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      position: relative;
+      background: radial-gradient(circle at 50% 20%, rgba(139, 92, 246, 0.08) 0%, transparent 60%);
+    }
+
+    .gate-card {
+      width: 100%;
+      max-width: 580px;
+      background: var(--bg-card);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 36px 32px;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .gate-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      background: rgba(139, 92, 246, 0.12);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      color: #C4B5FD;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      margin-bottom: 20px;
+      text-transform: uppercase;
+    }
+
+    .gate-title {
+      font-size: 24px;
+      font-weight: 800;
+      color: #FFF;
+      line-height: 1.3;
+      margin-bottom: 10px;
+      letter-spacing: -0.5px;
+    }
+
+    .gate-subtitle {
+      font-size: 14px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 28px;
+    }
+
+    /* Card Destaque: Aplicativo Desktop */
+    .app-highlight-card {
+      background: linear-gradient(145deg, rgba(18, 22, 32, 0.9), rgba(14, 18, 24, 0.95));
+      border: 1px solid rgba(139, 92, 246, 0.3);
+      border-radius: 18px;
+      padding: 24px;
+      margin-bottom: 20px;
+      text-align: left;
+      position: relative;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .app-highlight-card:hover {
+      border-color: rgba(139, 92, 246, 0.6);
+      transform: translateY(-2px);
+    }
+
+    .card-top-tag {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .badge-primary-tier {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #10B981, #8B5CF6);
+      color: #000;
+    }
+
+    .app-card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #FFF;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .features-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .features-list li {
+      font-size: 12.5px;
+      color: #D1D5DB;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      line-height: 1.4;
+    }
+
+    .feature-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent-emerald);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      flex-shrink: 0;
+      font-weight: bold;
+    }
+
+    .btn-download-app {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: linear-gradient(135deg, #8B5CF6, #EC4899);
+      color: #FFF;
+      font-size: 14px;
+      font-weight: 700;
+      padding: 13px 20px;
+      border-radius: 12px;
+      text-decoration: none;
+      box-shadow: 0 8px 20px rgba(139, 92, 246, 0.35);
+      transition: opacity 0.2s, transform 0.1s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-download-app:hover {
+      opacity: 0.95;
+      transform: scale(1.01);
+    }
+
+    /* Divisor "ou" */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin: 18px 0;
+      color: var(--text-dim);
+      font-size: 12px;
+      text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Opção Secundária: Continuar no Navegador */
+    .btn-browser-secondary {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: var(--bg-elevated);
+      color: #D1D5DB;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 12px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s, border-color 0.2s;
+    }
+
+    .btn-browser-secondary:hover {
+      background: #181E2C;
+      color: #FFF;
+      border-color: rgba(139, 92, 246, 0.4);
+    }
+
+    /* ==================== MODAL DE APELIDO ==================== */
+    #nicknameModal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      z-index: 50;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .modal-box {
+      width: 100%;
+      max-width: 440px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8);
+      text-align: left;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 800;
+      color: #FFF;
+      margin-bottom: 6px;
+    }
+
+    .modal-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.4;
+      margin-bottom: 20px;
+    }
+
+    .input-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #D1D5DB;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .text-input {
+      width: 100%;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-color);
+      color: #FFF;
+      padding: 12px 16px;
+      border-radius: 10px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+      margin-bottom: 22px;
+    }
+
+    .text-input:focus {
+      border-color: var(--accent-purple);
+      box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+    }
+
+    .modal-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-submit {
+      flex: 1;
+      background: linear-gradient(135deg, #10B981, #8B5CF6);
+      color: #FFF;
+      font-weight: 700;
+      font-size: 13px;
+      padding: 12px 18px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-submit:hover {
+      opacity: 0.95;
+    }
+
+    .btn-cancel {
+      background: transparent;
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 13px;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .btn-cancel:hover {
+      background: var(--bg-elevated);
+      color: #FFF;
+    }
+
+    /* ==================== PLAYER AO VIVO (TELA PRINCIPAL) ==================== */
+    #livePlayerSection {
+      display: none;
+      flex: 1;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 16px;
+      position: relative;
+    }
+
+    .player-wrapper {
+      width: 100%;
+      max-width: 1200px;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 18px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+
+    .player-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: rgba(9, 11, 14, 0.92);
+      padding: 24px;
+      text-align: center;
+      z-index: 10;
+    }
+
+    .spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid rgba(139, 92, 246, 0.2);
+      border-top-color: var(--accent-purple);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .player-subbar {
+      margin-top: 16px;
+      width: 100%;
+      max-width: 1200px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .subbar-user {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #E5E7EB;
+    }
+
+    .user-avatar-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-emerald);
+    }
+
+    .subbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn-action-ghost {
+      background: var(--bg-elevated);
+      color: var(--text-muted);
+      border: 1px solid var(--border-color);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: color 0.2s, background 0.2s;
+    }
+
+    .btn-action-ghost:hover {
+      background: #1C2333;
+      color: #FFF;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== HEADER GLOBAL ==================== -->
+  <header>
+    <a href="#" class="brand">
+      <div class="brand-logo">R</div>
+      <div class="brand-title">RAVIX <span>LIVE</span></div>
+    </a>
+
+    <div class="header-badges">
+      <span class="badge-room" id="headerRoomBadge" style="display: none;">SALA: ---</span>
+      <span class="live-badge" id="liveBadge" style="display: none;">
+        <span class="live-dot"></span> AO VIVO
+      </span>
+    </div>
+  </header>
+
+  <!-- ==================== ETAPA 1: INTERSTITIAL GATE (BOAS-VINDAS) ==================== -->
+  <section id="interstitialGate">
+    <div class="gate-card">
+      <div class="gate-pill" id="gatePill">
+        <span>Transmissão ao Vivo Privada</span>
+      </div>
+
+      <h1 class="gate-title">Você foi convidado para uma transmissão</h1>
+      <p class="gate-subtitle">
+        Escolha como deseja se conectar para assistir à gameplay e ao áudio em tempo real:
+      </p>
+
+      <!-- DESTAQUE PRINCIPAL: BAIXAR APLICATIVO DESKTOP -->
+      <div class="app-highlight-card">
+        <div class="card-top-tag">
+          <span class="badge-primary-tier">Experiência Máxima</span>
+          <span style="font-size: 11px; color: #9CA3AF;">Grátis • Windows</span>
+        </div>
+
+        <div class="app-card-title">
+          Assistir no Aplicativo RAVIX Desktop
+        </div>
+
+        <ul class="features-list">
+          <li>
+            <span class="feature-icon">✓</span>
+            <span><b>60 FPS Nativos e Fluidos:</b> Renderização direta por hardware D3D11</span>
+          </li>
+          <li>
+            <span class="feature-icon">✓</span>
+            <span><b>Latência Ultra-baixa:</b> Transmissão instantânea sem atrasos de buffering</span>
+          </li>
+          <li>
+            <span class="feature-icon">✓</span>
+            <span><b>Áudio do Sistema Integrado:</b> Som do jogo e microfone limpos sem eco</span>
+          </li>
+        </ul>
+
+        <a
+          href="https://github.com/ivyfated/ravix-updates/releases/latest"
+          target="_blank"
+          rel="noreferrer"
+          class="btn-download-app"
+        >
+          <span>Baixar RAVIX para Windows</span>
+          <span style="font-size: 16px;">↓</span>
+        </a>
+      </div>
+
+      <div class="divider">ou</div>
+
+      <!-- OPÇÃO SECUNDÁRIA: CONTINUAR NO NAVEGADOR -->
+      <button type="button" class="btn-browser-secondary" id="btnContinueBrowser" onclick="openNicknameModal()">
+        <span>Continuar no navegador</span>
+        <span>→</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- ==================== MODAL DE APELIDO ==================== -->
+  <div id="nicknameModal">
+    <div class="modal-box">
+      <h3 class="modal-title">Identificação de Espectador</h3>
+      <p class="modal-desc">
+        Defina seu apelido ou nome de exibição para que o streamer e seus amigos identifiquem você na sala:
+      </p>
+
+      <label class="input-label" for="nicknameInput">Apelido / Nome de exibição</label>
+      <input
+        type="text"
+        id="nicknameInput"
+        class="text-input"
+        placeholder="Ex: Pedro, Player1, FiveM_King"
+        maxlength="30"
+        autocomplete="off"
+      />
+
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel" onclick="closeNicknameModal()">Voltar</button>
+        <button type="button" class="btn-submit" onclick="confirmNicknameAndJoin()">Entrar na Transmissão</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ETAPA 2: PLAYER AO VIVO (WEB) ==================== -->
+  <main id="livePlayerSection">
+    <div class="player-wrapper">
+      <video id="remoteVideo" autoplay playsinline controls></video>
+      <div class="player-overlay" id="playerOverlay">
+        <div class="spinner" id="playerSpinner"></div>
+        <h3 id="overlayTitle" style="font-size: 18px; font-weight: 700;">Conectando ao RAVIX</h3>
+        <p id="overlayDesc" style="color: #9CA3AF; font-size: 13px; max-width: 400px; line-height: 1.5;">
+          Aguardando conexão com o streamer...
+        </p>
+      </div>
+    </div>
+
+    <div class="player-subbar">
+      <div class="subbar-user">
+        <span class="user-avatar-dot"></span>
+        <span>Assistindo como: <b id="subbarNickname" style="color: #FFF;">---</b></span>
+      </div>
+
+      <div class="subbar-actions">
+        <span id="playerStatusText" style="font-size: 12px; color: #9CA3AF;">Conectando...</span>
+        <button type="button" class="btn-action-ghost" onclick="leaveSession()">Sair da Sala</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- ==================== LÓGICA DE CONEXÃO & CONTROLE ==================== -->
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    let targetRoom = (urlParams.get("room") || urlParams.get("sala") || "").trim().toUpperCase();
+
+    // Elementos da Interface
+    const interstitialGate = document.getElementById("interstitialGate");
+    const nicknameModal = document.getElementById("nicknameModal");
+    const nicknameInput = document.getElementById("nicknameInput");
+    const livePlayerSection = document.getElementById("livePlayerSection");
+    const headerRoomBadge = document.getElementById("headerRoomBadge");
+    const liveBadge = document.getElementById("liveBadge");
+    const playerOverlay = document.getElementById("playerOverlay");
+    const playerSpinner = document.getElementById("playerSpinner");
+    const overlayTitle = document.getElementById("overlayTitle");
+    const overlayDesc = document.getElementById("overlayDesc");
+    const playerStatusText = document.getElementById("playerStatusText");
+    const subbarNickname = document.getElementById("subbarNickname");
+    const remoteVideo = document.getElementById("remoteVideo");
+    const gatePill = document.getElementById("gatePill");
+
+    let currentNickname = "";
+    let peer = null;
+    let dataConn = null;
+
+    // Se houver sala na URL, exibe no badge do gate
+    if (targetRoom) {
+      gatePill.innerHTML = `<span>Sala: <b>${targetRoom}</b></span>`;
+      headerRoomBadge.innerText = `SALA: ${targetRoom}`;
+      headerRoomBadge.style.display = "inline-block";
+    }
+
+    // Modal de Apelido
+    function openNicknameModal() {
+      // Se não houver sala na URL, solicitar código da sala primeiro
+      if (!targetRoom) {
+        const inputRoom = prompt("Digite o código da sala de transmissão (ex: RAVIX-ALPHA):");
+        if (!inputRoom || !inputRoom.trim()) {
+          alert("Código da sala é obrigatório.");
+          return;
+        }
+        targetRoom = inputRoom.trim().toUpperCase();
+        headerRoomBadge.innerText = `SALA: ${targetRoom}`;
+        headerRoomBadge.style.display = "inline-block";
+      }
+
+      nicknameModal.style.display = "flex";
+      setTimeout(() => {
+        nicknameInput.focus();
+      }, 50);
+    }
+
+    function closeNicknameModal() {
+      nicknameModal.style.display = "none";
+    }
+
+    nicknameInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        confirmNicknameAndJoin();
+      }
+    });
+
+    // Confirmação do apelido e entrada na transmissão
+    function confirmNicknameAndJoin() {
+      const nick = nicknameInput.value.trim();
+      currentNickname = nick || "Espectador";
+      closeNicknameModal();
+
+      // Transiciona do Interstitial Gate para a Tela do Player
+      interstitialGate.style.display = "none";
+      livePlayerSection.style.display = "flex";
+      subbarNickname.innerText = currentNickname;
+
+      // Inicializa a conexão WebRTC
+      startWebRtcViewer(targetRoom, currentNickname);
+    }
+
+    // Inicialização do PeerJS e WebRTC
+    function startWebRtcViewer(room, nickname) {
+      if (!room) return;
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+
+      playerOverlay.style.display = "flex";
+      playerSpinner.style.display = "block";
+      overlayTitle.innerText = "Conectando à Sala";
+      overlayDesc.innerText = `Localizando a transmissão em ${room}...`;
+      playerStatusText.innerText = "Conectando...";
+
+      peer = new Peer({
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" }
+          ]
+        }
+      });
+
+      peer.on("open", (myId) => {
+        console.log("Espectador registrado com ID:", myId);
+        playerStatusText.innerText = "Registrado no canal seguro";
+
+        // 1. Conecta via DataChannel para notificar o streamer com o apelido
+        dataConn = peer.connect(room, { reliable: true });
+
+        dataConn.on("open", () => {
+          console.log("DataChannel conectado ao streamer!");
+          playerStatusText.innerText = "Conectado ao streamer";
+          overlayTitle.innerText = "Aguardando Transmissão";
+          overlayDesc.innerText = "Conexão estabelecida! Aguardando o streamer iniciar o compartilhamento de tela...";
+
+          // Envia o apelido do espectador ao Host do RAVIX
+          dataConn.send({
+            type: "SPECTATOR_JOIN",
+            name: nickname,
+            id: myId
+          });
+        });
+
+        dataConn.on("data", (data) => {
+          if (data && data.type === "STREAM_STARTED") {
+            overlayTitle.innerText = "Recebendo Transmissão...";
+            overlayDesc.innerText = "Sincronizando áudio e vídeo em 60 FPS...";
+          } else if (data && data.type === "STREAM_STOPPED") {
+            playerOverlay.style.display = "flex";
+            playerSpinner.style.display = "none";
+            overlayTitle.innerText = "Transmissão Pausada";
+            overlayDesc.innerText = "O streamer pausou o compartilhamento de tela.";
+            liveBadge.style.display = "none";
+          }
+        });
+
+        dataConn.on("close", () => {
+          playerStatusText.innerText = "Streamer desconectou";
+          playerOverlay.style.display = "flex";
+          playerSpinner.style.display = "none";
+          overlayTitle.innerText = "Sala Fechada";
+          overlayDesc.innerText = "O streamer encerrou a sessão da sala.";
+          liveBadge.style.display = "none";
+        });
+      });
+
+      // 2. Recebe a chamada de vídeo e áudio do Host
+      peer.on("call", (mediaConn) => {
+        console.log("Recebendo chamada de mídia do streamer");
+        mediaConn.answer(); // Atende sem precisar enviar vídeo do espectador
+
+        mediaConn.on("stream", (remoteStream) => {
+          console.log("Fluxo de áudio e vídeo recebido com sucesso!");
+          remoteVideo.srcObject = remoteStream;
+          playerOverlay.style.display = "none";
+          liveBadge.style.display = "inline-flex";
+          playerStatusText.innerText = "Transmitindo em tempo real";
+
+          remoteVideo.play().catch((err) => {
+            console.warn("Autoplay bloqueado pelo navegador, interação requerida:", err);
+            overlayTitle.innerText = "Clique para Assistir";
+            overlayDesc.innerText = "O navegador requer um clique para liberar a reprodução de áudio e vídeo.";
+            playerOverlay.style.display = "flex";
+            playerSpinner.style.display = "none";
+            playerOverlay.style.cursor = "pointer";
+            playerOverlay.onclick = () => {
+              remoteVideo.play();
+              playerOverlay.style.display = "none";
+              playerOverlay.onclick = null;
+            };
+          });
+        });
+
+        mediaConn.on("close", () => {
+          playerOverlay.style.display = "flex";
+          playerSpinner.style.display = "none";
+          overlayTitle.innerText = "Transmissão Encerrada";
+          overlayDesc.innerText = "O streamer finalizou o compartilhamento.";
+          liveBadge.style.display = "none";
+        });
+      });
+
+      peer.on("error", (err) => {
+        console.error("Erro no PeerJS:", err);
+        playerSpinner.style.display = "none";
+        overlayTitle.innerText = "Falha na Conexão";
+        overlayDesc.innerText = `Não foi possível conectar à sala: ${err.type || err.message}`;
+        playerStatusText.innerText = "Erro de conexão";
+      });
+    }
+
+    // Sair da Sala e voltar ao Interstitial Gate
+    function leaveSession() {
+      if (dataConn) {
+        dataConn.close();
+        dataConn = null;
+      }
+      if (peer) {
+        peer.destroy();
+        peer = null;
+      }
+      if (remoteVideo.srcObject) {
+        const stream = remoteVideo.srcObject;
+        stream.getTracks().forEach((track) => track.stop());
+        remoteVideo.srcObject = null;
+      }
+
+      livePlayerSection.style.display = "none";
+      interstitialGate.style.display = "flex";
+      liveBadge.style.display = "none";
+      playerOverlay.style.display = "flex";
+      playerSpinner.style.display = "block";
+    }
+  </script>
+</body>
+</html>

@@ -1,11 +1,11 @@
 {
-  "version": "0.3.4",
-  "notes": "RAVIX V0.3.4 - Nova Arquitetura de Transmissão ao Vivo (Estado Idle inicial, Interstitial Gate web, seleção de apelido e áudio integrado), Correção de Áudio WASAPI (0x88890004) e Paridade de Exportação MP4.",
-  "pub_date": "2026-11-16T19:12:00Z",
+  "version": "0.3.5",
+  "notes": "RAVIX V0.3.5 - Painel de Transmissão Unificado (Criar e Assistir via código diretamente no Desktop App), Interstitial Gate web (watch.html) no GitHub Pages, Correção de Áudio WASAPI (0x88890004) e Paridade de Exportação MP4.",
+  "pub_date": "2026-11-16T20:10:00Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcE9ycm1TaCtqV29kSjZ0aHI3TXdKbkRmUWNDOGRKcGlXekN6cjJPWUVmUFJma29lYmtWejVIYmEwQTArdHN1TTVZdDRxa1VDTjJ5WWFvV1piZnFldmdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODU2MjY5CWZpbGU6UkFWSVhfMC4zLjRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy40CkdVdld0aG52YUVGa1JDUGJsWXNWTG4xOEtWYXZXa2J1WkhUamY2blFod2diLzZNaC9sRVJrOCtTdnRDeE5uWVVqbDVUZERhN2VsS0ZqUkFiUUJRT0FBPT0K",
-      "url": "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.4/RAVIX_0.3.4_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcEVpSzgzOEpjaEZFVmxiblJmalRPTHdPbkcwdEpKV0lGN1VuYW9QZHRNY0Y4emwvRmRZbEFqbWN6TE12a1k5YVZrcm90cFZLVG5oUjhsWk5IREY1V0E4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODU5NzQwCWZpbGU6UkFWSVhfMC4zLjVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy41ClJ5Y1BBUDVBU0pjVnMrN0ZHVi9yWCtRcTIwNS9LVWQ0dmFwY3VKb0J1NnhBeGU4UEVkbXdhWlFFU21ScktSdTI0SG9MckRubEIwWDhQQ05HbU9SR0NBPT0K",
+      "url": "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.5/RAVIX_0.3.5_x64-setup.exe"
     }
   }
 }

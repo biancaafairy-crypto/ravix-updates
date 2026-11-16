@@ -18,8 +18,11 @@ import {
   Sparkles,
   Zap,
   Loader2,
+  ArrowLeft,
+  LogIn,
+  Maximize2,
 } from "lucide-react";
-import type { StreamStatus, StreamTelemetry, SpectatorPeer } from "./types";
+import type { StreamMode, StreamStatus, SpectatorStatus, StreamTelemetry, SpectatorPeer } from "./types";
 
 function generateRoomId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -31,22 +34,22 @@ function generateRoomId(): string {
 }
 
 export function StreamView() {
-  // Estado de Inicialização do Host: Inicia OCIOSO ("idle"), sem chave gerada previamente
+  // Modo de operação da aba: "idle" (painel unificado inicial), "host" (transmitindo) ou "spectator" (assistindo)
+  const [mode, setMode] = useState<StreamMode>("idle");
+
+  // ==================== ESTADO DO HOST ====================
   const [roomId, setRoomId] = useState<string>("");
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("idle");
   const [statusMessage, setStatusMessage] = useState<string>("Pronto para criar uma sala");
 
-  // Mídia & Captura
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Espectadores e Conexões
   const [spectators, setSpectators] = useState<SpectatorPeer[]>([]);
   const activeConnectionsRef = useRef<Map<string, { dataConn: DataConnection; mediaConn?: MediaConnection }>>(new Map());
 
-  // Telemetria da Transmissão
   const [telemetry, setTelemetry] = useState<StreamTelemetry>({
     width: 0,
     height: 0,
@@ -57,21 +60,32 @@ export function StreamView() {
     bitrateEstimateKbps: 0,
   });
 
-  // Tela de Teste de Espectador (Loopback Local)
+  // Tela de Teste de Espectador (Loopback do Host)
   const [showTestViewer, setShowTestViewer] = useState(false);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [testStatus, setTestStatus] = useState<string>("Desconectado");
   const [testLatencyMs, setTestLatencyMs] = useState<number | null>(null);
 
-  // Elementos de vídeo
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
   const testVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  // Instâncias PeerJS
   const hostPeerRef = useRef<Peer | null>(null);
   const testPeerRef = useRef<Peer | null>(null);
 
-  // Temporizador de Transmissão
+  // ==================== ESTADO DO ESPECTADOR (VIEWER IN-APP) ====================
+  const [joinRoomInput, setJoinRoomInput] = useState<string>("");
+  const [joinNicknameInput, setJoinNicknameInput] = useState<string>("");
+  const [spectatorRoomId, setSpectatorRoomId] = useState<string>("");
+  const [spectatorStatus, setSpectatorStatus] = useState<SpectatorStatus>("idle");
+  const [spectatorStatusMsg, setSpectatorStatusMsg] = useState<string>("Desconectado");
+  const [spectatorStream, setSpectatorStream] = useState<MediaStream | null>(null);
+  const [spectatorLatencyMs, setSpectatorLatencyMs] = useState<number | null>(null);
+  const [spectatorAudioMuted, setSpectatorAudioMuted] = useState(false);
+
+  const spectatorVideoRef = useRef<HTMLVideoElement | null>(null);
+  const spectatorPeerRef = useRef<Peer | null>(null);
+  const spectatorDataConnRef = useRef<DataConnection | null>(null);
+
+  // Temporizador de Transmissão do Host
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
     if (streamStatus === "streaming") {
@@ -89,21 +103,28 @@ export function StreamView() {
     };
   }, [streamStatus]);
 
-  // Atualizar elemento de vídeo local quando o stream mudar
+  // Atualizar elemento de vídeo local (Host)
   useEffect(() => {
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = mediaStream;
     }
   }, [mediaStream]);
 
-  // Atualizar elemento de vídeo de teste
+  // Atualizar elemento de vídeo de teste (Host Loopback)
   useEffect(() => {
     if (testVideoRef.current) {
       testVideoRef.current.srcObject = testStream;
     }
   }, [testStream]);
 
-  // Limpeza ao desmontar componente
+  // Atualizar elemento de vídeo do Espectador in-app
+  useEffect(() => {
+    if (spectatorVideoRef.current) {
+      spectatorVideoRef.current.srcObject = spectatorStream;
+    }
+  }, [spectatorStream]);
+
+  // Limpeza geral ao desmontar componente
   useEffect(() => {
     return () => {
       if (mediaStream) {
@@ -117,20 +138,25 @@ export function StreamView() {
         testPeerRef.current.destroy();
         testPeerRef.current = null;
       }
+      if (spectatorPeerRef.current) {
+        spectatorPeerRef.current.destroy();
+        spectatorPeerRef.current = null;
+      }
       activeConnectionsRef.current.clear();
     };
   }, [mediaStream]);
 
-  // 1. Criar Sala de Transmissão (Ação explícita do Host)
+  // ==================== LÓGICA DO HOST ====================
+
   const handleCreateRoom = useCallback(() => {
     if (hostPeerRef.current) {
       hostPeerRef.current.destroy();
       hostPeerRef.current = null;
     }
 
-    // Geração dinâmica e sob demanda da chave da sala
     const newRoomId = generateRoomId();
     setRoomId(newRoomId);
+    setMode("host");
     setStreamStatus("creating_room");
     setStatusMessage("Iniciando sala de transmissão...");
 
@@ -152,7 +178,6 @@ export function StreamView() {
         setStatusMessage(`Sala pronta: ${id}`);
       });
 
-      // Quando um espectador se conecta via DataChannel
       peer.on("connection", (dataConn) => {
         const peerId = dataConn.peer;
         activeConnectionsRef.current.set(peerId, { dataConn });
@@ -168,7 +193,6 @@ export function StreamView() {
             status: streamStatus === "streaming" ? "STREAMING" : "READY",
           });
 
-          // Se já estiver transmitindo tela, liga para o novo espectador imediatamente
           if (mediaStream) {
             const call = peer.call(peerId, mediaStream);
             const entry = activeConnectionsRef.current.get(peerId);
@@ -177,7 +201,6 @@ export function StreamView() {
         });
 
         dataConn.on("data", (data: any) => {
-          // Recepção do apelido do espectador enviado pelo modal do watch.html
           if (data && typeof data === "object") {
             if (data.type === "SPECTATOR_JOIN" && data.name) {
               const displayName = String(data.name).trim().slice(0, 30);
@@ -199,7 +222,6 @@ export function StreamView() {
         });
       });
 
-      // Se um espectador solicitar chamada
       peer.on("call", (mediaConn) => {
         if (mediaStream) {
           mediaConn.answer(mediaStream);
@@ -217,7 +239,6 @@ export function StreamView() {
     }
   }, [mediaStream, streamStatus]);
 
-  // 2. Iniciar Captura de Tela (getDisplayMedia)
   const handleStartCapture = async () => {
     try {
       setStatusMessage("Solicitando permissão de captura de tela ao Windows...");
@@ -227,7 +248,7 @@ export function StreamView() {
           width: { ideal: 1920 },
           height: { ideal: 1080 },
         },
-        audio: true, // Captura áudio do sistema/jogo integrado
+        audio: true,
       });
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -252,7 +273,6 @@ export function StreamView() {
       setStreamStatus("streaming");
       setStatusMessage("Transmissão ativa e compartilhando!");
 
-      // Enviar fluxo de vídeo/áudio para todos os espectadores conectados
       if (hostPeerRef.current) {
         activeConnectionsRef.current.forEach((connData, peerId) => {
           try {
@@ -274,7 +294,6 @@ export function StreamView() {
     }
   };
 
-  // 3. Parar Captura de Tela
   const handleStopCapture = () => {
     if (mediaStream) {
       mediaStream.getTracks().forEach((track) => track.stop());
@@ -290,7 +309,6 @@ export function StreamView() {
     });
   };
 
-  // 4. Fechar Sala e Retornar ao Estado Ocioso ("Idle")
   const handleCloseRoom = () => {
     handleStopCapture();
     if (hostPeerRef.current) {
@@ -300,12 +318,13 @@ export function StreamView() {
     handleStopTestViewer();
     activeConnectionsRef.current.clear();
     setSpectators([]);
-    setRoomId(""); // Limpa o ID da sala para não vazar estado anterior
+    setRoomId("");
     setStreamStatus("idle");
+    setMode("idle");
     setStatusMessage("Pronto para criar uma sala");
   };
 
-  // 5. Teste Local de Transmissão (Loopback no App)
+  // Teste local do Host
   const handleStartTestViewer = () => {
     if (!roomId) return;
     if (testPeerRef.current) {
@@ -376,7 +395,141 @@ export function StreamView() {
     setTestStatus("Desconectado");
   };
 
-  // URLs formatadas para os espectadores (geradas apenas quando roomId existir)
+  // ==================== LÓGICA DO ESPECTADOR (ENTRAR COM CÓDIGO NO APP) ====================
+
+  const handleJoinAsSpectator = () => {
+    const target = joinRoomInput.trim().toUpperCase();
+    if (!target) return;
+
+    setSpectatorRoomId(target);
+    setMode("spectator");
+    setSpectatorStatus("connecting");
+    setSpectatorStatusMsg(`Conectando à sala ${target}...`);
+    const t0 = performance.now();
+
+    if (spectatorPeerRef.current) {
+      spectatorPeerRef.current.destroy();
+      spectatorPeerRef.current = null;
+    }
+
+    try {
+      const viewerPeer = new Peer({
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+            { urls: "stun:stun2.l.google.com:19302" },
+          ],
+        },
+      });
+
+      viewerPeer.on("open", (myId) => {
+        setSpectatorStatusMsg("Registrado na rede. Conectando ao streamer...");
+        const conn = viewerPeer.connect(target, { reliable: true });
+        spectatorDataConnRef.current = conn;
+
+        conn.on("open", () => {
+          setSpectatorStatus("connected");
+          setSpectatorStatusMsg("Conectado! Aguardando compartilhamento de tela...");
+          setSpectatorLatencyMs(Math.round(performance.now() - t0));
+
+          // Enviar apelido do espectador ao Host
+          const nickname = joinNicknameInput.trim() || "Amigo no RAVIX";
+          conn.send({
+            type: "SPECTATOR_JOIN",
+            name: nickname,
+            id: myId,
+          });
+        });
+
+        conn.on("data", (data: any) => {
+          if (data?.type === "STREAM_STARTED") {
+            setSpectatorStatusMsg("Recebendo transmissão ao vivo...");
+          } else if (data?.type === "STREAM_STOPPED") {
+            setSpectatorStatus("connected");
+            setSpectatorStatusMsg("O streamer pausou o compartilhamento de tela.");
+          }
+        });
+
+        conn.on("close", () => {
+          setSpectatorStatus("ended");
+          setSpectatorStatusMsg("O streamer encerrou a sessão da sala.");
+        });
+
+        conn.on("error", (err) => {
+          console.error("DataConnection error:", err);
+          setSpectatorStatus("error");
+          setSpectatorStatusMsg("Erro de conexão de dados com a sala.");
+        });
+      });
+
+      viewerPeer.on("call", (mediaConn) => {
+        setSpectatorStatusMsg("Atendendo chamada de vídeo e som...");
+        mediaConn.answer();
+
+        mediaConn.on("stream", (remoteStream) => {
+          setSpectatorStream(remoteStream);
+          setSpectatorStatus("streaming");
+          setSpectatorStatusMsg("Assistindo transmissão ao vivo!");
+          setSpectatorLatencyMs(Math.round(performance.now() - t0));
+        });
+
+        mediaConn.on("close", () => {
+          setSpectatorStatus("ended");
+          setSpectatorStatusMsg("A transmissão foi finalizada pelo streamer.");
+          setSpectatorStream(null);
+        });
+      });
+
+      viewerPeer.on("error", (err) => {
+        console.error("Viewer error:", err);
+        setSpectatorStatus("error");
+        setSpectatorStatusMsg(`Não foi possível conectar: ${err.type || err.message}`);
+      });
+
+      spectatorPeerRef.current = viewerPeer;
+    } catch (e: any) {
+      setSpectatorStatus("error");
+      setSpectatorStatusMsg(`Erro ao conectar: ${e?.message || String(e)}`);
+    }
+  };
+
+  const handleLeaveSpectator = () => {
+    if (spectatorDataConnRef.current) {
+      spectatorDataConnRef.current.close();
+      spectatorDataConnRef.current = null;
+    }
+    if (spectatorPeerRef.current) {
+      spectatorPeerRef.current.destroy();
+      spectatorPeerRef.current = null;
+    }
+    setSpectatorStream(null);
+    setSpectatorRoomId("");
+    setSpectatorStatus("idle");
+    setMode("idle");
+    setSpectatorStatusMsg("Desconectado");
+  };
+
+  const toggleSpectatorAudio = () => {
+    if (spectatorVideoRef.current) {
+      const nextMute = !spectatorAudioMuted;
+      spectatorVideoRef.current.muted = nextMute;
+      setSpectatorAudioMuted(nextMute);
+    }
+  };
+
+  const toggleSpectatorFullscreen = () => {
+    if (spectatorVideoRef.current) {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      } else {
+        spectatorVideoRef.current.requestFullscreen().catch(() => {});
+      }
+    }
+  };
+
+  // Links do Host
   const viewerWebUrl = roomId
     ? `https://ivyfated.github.io/ravix-updates/watch.html?room=${encodeURIComponent(roomId)}`
     : "";
@@ -405,11 +558,9 @@ export function StreamView() {
     return `${hrs.toString().padStart(2, "0")}:${(mins % 60).toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
-  const isIdle = streamStatus === "idle" || streamStatus === "creating_room";
-
   return (
     <div className="flex-1 flex flex-col h-full bg-[#090B0E] text-zinc-100 overflow-y-auto p-4 md:p-6 gap-5">
-      {/* ==================== BARRA SUPERIOR ==================== */}
+      {/* ==================== BARRA SUPERIOR GLOBAL ==================== */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl bg-[#0E1218] border border-zinc-800 shadow-xl">
         <div className="flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-gradient-to-br from-rose-500/20 to-purple-500/20 border border-rose-500/30 text-rose-400">
@@ -420,20 +571,25 @@ export function StreamView() {
               <h1 className="text-base font-bold text-white tracking-wide">
                 TRANSMISSÃO AO VIVO
               </h1>
-              {streamStatus === "streaming" && (
+              {mode === "host" && streamStatus === "streaming" && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
                   AO VIVO
                 </span>
               )}
+              {mode === "spectator" && spectatorStatus === "streaming" && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                  RECEBENDO
+                </span>
+              )}
             </div>
             <p className="text-xs text-zinc-400 mt-0.5">
-              <span>{statusMessage}</span>
+              <span>{mode === "spectator" ? spectatorStatusMsg : statusMessage}</span>
             </p>
           </div>
         </div>
 
-        {/* Controles de Ação no Topo (Apenas quando NÃO estiver ocioso) */}
-        {!isIdle && (
+        {/* Controles no Topo para Modo Host Ativo */}
+        {mode === "host" && streamStatus !== "idle" && (
           <div className="flex items-center gap-3">
             {streamStatus === "streaming" && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 font-bold text-xs animate-pulse">
@@ -475,89 +631,228 @@ export function StreamView() {
             </button>
           </div>
         )}
+
+        {/* Controles no Topo para Modo Espectador */}
+        {mode === "spectator" && (
+          <div className="flex items-center gap-3">
+            {spectatorLatencyMs !== null && (
+              <div className="px-3 py-1.5 rounded-xl bg-[#121620] border border-zinc-800 text-xs font-mono text-emerald-400">
+                Latência: {spectatorLatencyMs}ms
+              </div>
+            )}
+            <button
+              onClick={handleLeaveSpectator}
+              className="px-3.5 py-1.5 rounded-xl bg-[#171C26] hover:bg-red-500/20 hover:text-red-300 border border-zinc-800 text-zinc-300 font-semibold text-xs flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Sair da Sala
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* ==================== ESTADO 1: INICIALIZAÇÃO OCIOSA (IDLE CTA LIMPO) ==================== */}
-      {isIdle ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-[460px]">
-          <div className="max-w-xl w-full flex flex-col items-center text-center p-8 md:p-12 rounded-3xl bg-gradient-to-b from-[#0E1218] to-[#0A0D12] border border-zinc-800/80 shadow-2xl relative overflow-hidden">
-            {/* Brilho decorativo no fundo */}
-            <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -bottom-24 left-1/2 -translate-x-1/2 w-80 h-80 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+      {/* ==================== MODO 1: PAINEL OCIOSO UNIFICADO (IDLE: CRIAR OU ENTRAR) ==================== */}
+      {mode === "idle" && (
+        <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 min-h-[480px]">
+          <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+            {/* Efeitos decorativos sutis */}
+            <div className="absolute -top-16 left-1/4 w-72 h-72 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-16 right-1/4 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            {/* Ícone Hero */}
-            <div className="relative mb-6">
-              <div className="p-5 rounded-2xl bg-[#121620] border border-purple-500/30 text-purple-400 shadow-xl shadow-purple-950/20">
-                <Radio className="h-10 w-10 text-rose-400" />
+            {/* CARD 1: CRIAR SALA DE TRANSMISSÃO (HOST) */}
+            <div className="flex flex-col justify-between p-6 md:p-8 rounded-3xl bg-gradient-to-b from-[#0E1218] to-[#0A0D12] border border-zinc-800 shadow-2xl relative overflow-hidden group hover:border-purple-500/40 transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="p-3 rounded-2xl bg-[#121620] border border-purple-500/30 text-rose-400 shadow-lg">
+                    <Radio className="h-8 w-8" />
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase bg-purple-500/15 text-purple-300 border border-purple-500/30">
+                    Transmitir Tela
+                  </span>
+                </div>
+
+                <h2 className="text-lg md:text-xl font-extrabold text-white mb-2">
+                  Criar Sala de Transmissão
+                </h2>
+                <p className="text-xs text-zinc-400 leading-relaxed mb-6">
+                  Transmita sua gameplay do FiveM, GTA V ou qualquer tela em tempo real para seus amigos com áudio integrado do jogo e 60 FPS estáveis.
+                </p>
+
+                <div className="space-y-2 mb-8">
+                  <div className="flex items-center gap-2 text-xs text-zinc-300">
+                    <Zap className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+                    <span>60 FPS nativos com aceleração por hardware</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-zinc-300">
+                    <Volume2 className="h-3.5 w-3.5 text-purple-400 shrink-0" />
+                    <span>Captura direta do áudio do sistema e jogo sem eco</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-zinc-300">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                    <span>Link instantâneo para amigos no navegador ou app</span>
+                  </div>
+                </div>
               </div>
-              <span className="absolute -bottom-1 -right-1 p-1 rounded-full bg-emerald-500 text-black">
-                <Sparkles className="h-3 w-3 fill-current" />
-              </span>
+
+              <button
+                onClick={handleCreateRoom}
+                disabled={streamStatus === "creating_room"}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-purple-600 to-rose-600 hover:opacity-95 text-white font-bold text-xs md:text-sm flex items-center justify-center gap-2.5 shadow-xl shadow-purple-950/40 transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50"
+              >
+                {streamStatus === "creating_room" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Criando Sala...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 fill-current" />
+                    <span>Criar Sala de Transmissão</span>
+                  </>
+                )}
+              </button>
             </div>
 
-            {/* Texto de Boas-Vindas */}
-            <h2 className="text-xl md:text-2xl font-extrabold text-white tracking-tight mb-2">
-              Transmissão ao Vivo para Amigos
-            </h2>
-            <p className="text-xs md:text-sm text-zinc-400 mb-8 max-w-md leading-relaxed">
-              Transmita FiveM, GTA V ou qualquer janela diretamente para seus amigos em tempo real com áudio integrado do sistema e sem atrasos.
-            </p>
-
-            {/* Botão de Chamada para Ação Principal (CTA) */}
-            <button
-              onClick={handleCreateRoom}
-              disabled={streamStatus === "creating_room"}
-              className="w-full sm:w-auto px-8 py-3.5 rounded-2xl bg-gradient-to-r from-purple-600 via-rose-600 to-emerald-600 hover:opacity-95 text-white font-extrabold text-sm flex items-center justify-center gap-3 shadow-xl shadow-purple-900/30 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
-            >
-              {streamStatus === "creating_room" ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  <span>Criando Sala de Transmissão...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 fill-current" />
-                  <span>Criar Sala de Transmissão</span>
-                </>
-              )}
-            </button>
-
-            {/* Destaques Técnicos Nativos */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full mt-10 pt-8 border-t border-zinc-800/80 text-left">
-              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
-                <div className="flex items-center gap-2 text-rose-400 font-bold text-xs mb-1">
-                  <Zap className="h-3.5 w-3.5" />
-                  60 FPS Estáveis
+            {/* CARD 2: ASSISTIR TRANSMISSÃO DE UM AMIGO (VIEWER NO APP) */}
+            <div className="flex flex-col justify-between p-6 md:p-8 rounded-3xl bg-gradient-to-b from-[#0E1218] to-[#0A0D12] border border-zinc-800 shadow-2xl relative overflow-hidden group hover:border-emerald-500/40 transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-6">
+                  <div className="p-3 rounded-2xl bg-[#121620] border border-emerald-500/30 text-emerald-400 shadow-lg">
+                    <Tv className="h-8 w-8" />
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    Assistir no App
+                  </span>
                 </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Transmissão com alta taxa de quadros e baixa latência.
+
+                <h2 className="text-lg md:text-xl font-extrabold text-white mb-2">
+                  Entrar com Código da Sala
+                </h2>
+                <p className="text-xs text-zinc-400 leading-relaxed mb-6">
+                  Digite o código compartilhado pelo seu amigo para assistir à transmissão dele com máxima fluidez, menor latência e áudio estéreo.
                 </p>
+
+                <div className="space-y-3 mb-6">
+                  <div>
+                    <label className="text-[11px] font-semibold text-zinc-400 mb-1 block">
+                      Código / ID da Sala
+                    </label>
+                    <input
+                      type="text"
+                      value={joinRoomInput}
+                      onChange={(e) => setJoinRoomInput(e.target.value.toUpperCase())}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && joinRoomInput.trim()) {
+                          handleJoinAsSpectator();
+                        }
+                      }}
+                      placeholder="EX: RAVIX-ALPHA"
+                      className="w-full rounded-xl border border-zinc-800 bg-[#121620] px-3.5 py-2.5 text-xs font-mono font-bold text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-zinc-400 mb-1 block">
+                      Seu Apelido (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={joinNicknameInput}
+                      onChange={(e) => setJoinNicknameInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && joinRoomInput.trim()) {
+                          handleJoinAsSpectator();
+                        }
+                      }}
+                      placeholder="Ex: Pedro, Player1"
+                      maxLength={30}
+                      className="w-full rounded-xl border border-zinc-800 bg-[#121620] px-3.5 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
-                <div className="flex items-center gap-2 text-purple-400 font-bold text-xs mb-1">
-                  <Volume2 className="h-3.5 w-3.5" />
-                  Áudio Integrado
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Som do jogo e microfone capturados sem eco.
-                </p>
-              </div>
-
-              <div className="p-3 rounded-xl bg-[#121620]/60 border border-zinc-800/60">
-                <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs mb-1">
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  Privado e Direto
-                </div>
-                <p className="text-[11px] text-zinc-400 leading-snug">
-                  Conexão criptografada sem servidores intermediários.
-                </p>
-              </div>
+              <button
+                onClick={handleJoinAsSpectator}
+                disabled={!joinRoomInput.trim()}
+                className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:opacity-95 text-white font-bold text-xs md:text-sm flex items-center justify-center gap-2.5 shadow-xl shadow-emerald-950/40 transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <LogIn className="h-4 w-4" />
+                <span>Assistir Transmissão no App</span>
+              </button>
             </div>
           </div>
         </div>
-      ) : (
-        /* ==================== ESTADO 2: SESSÃO ATIVA (ACTIVE DASHBOARD) ==================== */
+      )}
+
+      {/* ==================== MODO 2: ESPECTADOR NO APP DESKTOP (VIEWER SCREEN) ==================== */}
+      {mode === "spectator" && (
+        <div className="flex-1 flex flex-col items-center justify-center gap-4">
+          <div className="w-full max-w-5xl aspect-video rounded-2xl bg-black border border-zinc-800 overflow-hidden shadow-2xl relative flex items-center justify-center group">
+            <video
+              ref={spectatorVideoRef}
+              autoPlay
+              playsInline
+              className={`w-full h-full object-contain ${!spectatorStream ? "hidden" : ""}`}
+            />
+
+            {/* Overlay quando ainda não recebeu vídeo */}
+            {!spectatorStream && (
+              <div className="flex flex-col items-center justify-center p-8 text-center max-w-md">
+                <div className="inline-block animate-spin h-8 w-8 border-3 border-emerald-500 border-t-transparent rounded-full mb-4" />
+                <h3 className="text-base font-bold text-white mb-1">
+                  {spectatorStatusMsg}
+                </h3>
+                <p className="text-xs text-zinc-400">
+                  Sala: <b className="text-zinc-200">{spectatorRoomId}</b>
+                </p>
+              </div>
+            )}
+
+            {/* Controles de overlay no hover do player */}
+            {spectatorStream && (
+              <div className="absolute bottom-4 right-4 flex items-center gap-2 bg-black/80 backdrop-blur-md p-1.5 rounded-xl border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={toggleSpectatorAudio}
+                  className="p-2 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                  title={spectatorAudioMuted ? "Desmutar som" : "Mutar som"}
+                >
+                  {spectatorAudioMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+                <button
+                  onClick={toggleSpectatorFullscreen}
+                  className="p-2 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white transition-colors cursor-pointer"
+                  title="Tela Cheia"
+                >
+                  <Maximize2 className="h-4 w-4" />
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Sub-barra de informações da sessão */}
+          <div className="w-full max-w-5xl flex items-center justify-between p-3.5 rounded-2xl bg-[#0E1218] border border-zinc-800 text-xs text-zinc-400">
+            <div className="flex items-center gap-3">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Conectado à sala: <b className="text-white font-mono">{spectatorRoomId}</b></span>
+              <span className="text-zinc-600">•</span>
+              <span>Assistindo como: <b className="text-zinc-200">{joinNicknameInput.trim() || "Amigo no RAVIX"}</b></span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleLeaveSpectator}
+                className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium transition-colors cursor-pointer"
+              >
+                Voltar ao Menu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODO 3: HOST ATIVO (ACTIVE DASHBOARD) ==================== */}
+      {mode === "host" && streamStatus !== "idle" && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
           {/* COLUNA ESQUERDA: PREVIEW PRINCIPAL & RETORNO DO STREAMER (8 colunas) */}
           <div className="lg:col-span-8 flex flex-col gap-4">
@@ -619,7 +914,7 @@ export function StreamView() {
                 <div className="absolute bottom-3 right-3 flex items-center gap-2 bg-black/80 backdrop-blur-md p-1.5 rounded-xl border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={() => setIsAudioMuted(!isAudioMuted)}
-                    className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white"
+                    className="p-1.5 rounded-lg hover:bg-white/10 text-zinc-300 hover:text-white cursor-pointer"
                     title={isAudioMuted ? "Desmutar prévia local" : "Mutar prévia local"}
                   >
                     {isAudioMuted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
@@ -628,7 +923,7 @@ export function StreamView() {
               )}
             </div>
 
-            {/* ==================== TELA DE TESTE DE ESPECTADOR ==================== */}
+            {/* Teste Local de Transmissão */}
             <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -694,9 +989,8 @@ export function StreamView() {
             </div>
           </div>
 
-          {/* COLUNA DIREITA: CONFIGURAÇÕES DA SALA & COMPARTILHAMENTO (4 colunas) */}
+          {/* COLUNA DIREITA: DADOS DA SALA & ESPECTADORES (4 colunas) */}
           <div className="lg:col-span-4 flex flex-col gap-4">
-            {/* Card: Dados da Sala Ativa */}
             <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-4 shadow-xl">
               <div className="flex items-center justify-between">
                 <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
@@ -774,7 +1068,7 @@ export function StreamView() {
               </div>
             </div>
 
-            {/* Card: Lista de Espectadores Conectados */}
+            {/* Lista de Espectadores */}
             <div className="rounded-2xl bg-[#0E1218] border border-zinc-800 p-4 space-y-3 shadow-xl">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
@@ -787,7 +1081,7 @@ export function StreamView() {
                 <div className="py-6 text-center text-xs text-zinc-500 border border-dashed border-zinc-800/80 rounded-xl">
                   Nenhum amigo conectado no momento.
                   <br />
-                  Envie o link para começarem a assistir.
+                  Envie o código ou link da sala.
                 </div>
               ) : (
                 <div className="space-y-1.5 max-h-48 overflow-y-auto">
