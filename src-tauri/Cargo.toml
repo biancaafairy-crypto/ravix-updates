@@ -1,6 +1,6 @@
 [package]
 name = "ravix"
-version = "0.3.3"
+version = "0.3.4"
 description = "RAVIX — Gravador de Gameplay PvP de Baixo Impacto"
 authors = ["RAVIX"]
 edition = "2021"

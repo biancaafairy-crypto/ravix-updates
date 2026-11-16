@@ -1,11 +1,11 @@
 {
-    "version":  "0.3.3",
-    "notes":  "RAVIX V0.3.3 — Correções Críticas de Exportação MP4, Áudio WASAPI Resiliente (0x88890004), Nova Aba de Transmissão ao Vivo, Transformação Direcional 8-Alças e Atalhos Centralizados.",
-    "pub_date":  "2026-11-16T12:15:00Z",
-    "platforms":  {
-                      "windows-x86_64":  {
-                                             "signature":  "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcEs1ZnFzaDZFeG1qWEhBeE5mbktwMjV5cGNKTHE1cUVEOVZCUzYrOWJyTlBTejJGRld3ZVk4TXUrV1VsYVV6NkF5KzZURmUzTm03c042RHdrRE00MHdJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODMxMzIxCWZpbGU6UkFWSVhfMC4zLjNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy4zCjZ0NVdyV0V0R2QvcGNRSkl0K1gwV3FLNUhkVTVjYXY4U3d1QmVLc3o2aEpOTXNHL0g3NlVIdUxDWStFTVFLdVkvR2ZJVmd1d3R2QlZtVEU5K0pvekR3PT0K",
-                                             "url":  "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.3/RAVIX_0.3.3_x64-setup.exe"
-                                         }
-                  }
+  "version": "0.3.4",
+  "notes": "RAVIX V0.3.4 - Correção de Áudio WASAPI (0x88890004), Nova Aba de Transmissão ao Vivo, Paridade de Exportação MP4 e Atalhos Centralizados.",
+  "pub_date": "2026-11-16T18:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVSMGNmREdYR1lmcEFBcitQRWIwQTUxc1NDeE9zSkJobTBRR3Vub0dkbVVzSG1ZUldFdXJyNjg5VjQwYy9aOFJ1Rnd6M2l1eWg5cmkwRTFxSk5sNW03dll1cUZrdjBENEFNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0ODUyMDAxCWZpbGU6UkFWSVhfMC4zLjRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy40ClgvL0dxcEtMNDNqa1ZGVEthbUl1cXYyT1p1Yk9Yblcrd1hpb2l1Rms3RUM1RWZMRnBCbVRzRWJUZ0VIc3pLMjdKTG5rNjRFcFpReFNOeTR5L3VzUUN3PT0K",
+      "url": "https://github.com/ivyfated/ravix-updates/releases/download/v0.3.4/RAVIX_0.3.4_x64-setup.exe"
+    }
+  }
 }
