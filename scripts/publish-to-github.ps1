@@ -3,7 +3,7 @@
     [string]$Token = $env:GITHUB_TOKEN,
 
     [Parameter(Mandatory=$false)]
-    [string]$Version = "0.3.5",
+    [string]$Version = "0.3.6",
 
     [Parameter(Mandatory=$false)]
     [string]$Repo = "ivyfated/ravix-updates"

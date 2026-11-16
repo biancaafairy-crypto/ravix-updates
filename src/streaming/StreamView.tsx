@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Peer, type DataConnection, type MediaConnection } from "peerjs";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Radio,
   Tv,
@@ -21,6 +22,8 @@ import {
   ArrowLeft,
   LogIn,
   Maximize2,
+  AlertCircle,
+  RefreshCw,
 } from "lucide-react";
 import type { StreamMode, StreamStatus, SpectatorStatus, StreamTelemetry, SpectatorPeer } from "./types";
 
@@ -64,6 +67,7 @@ export function StreamView() {
   const [showTestViewer, setShowTestViewer] = useState(false);
   const [testStream, setTestStream] = useState<MediaStream | null>(null);
   const [testStatus, setTestStatus] = useState<string>("Desconectado");
+  const [testError, setTestError] = useState<string | null>(null);
   const [testLatencyMs, setTestLatencyMs] = useState<number | null>(null);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -309,6 +313,7 @@ export function StreamView() {
     });
   };
 
+  // Limpeza completa ao fechar sala pelo Host: reseta tela e volta ao Idle imediatamente
   const handleCloseRoom = () => {
     handleStopCapture();
     if (hostPeerRef.current) {
@@ -319,9 +324,20 @@ export function StreamView() {
     activeConnectionsRef.current.clear();
     setSpectators([]);
     setRoomId("");
+    setMediaStream(null);
     setStreamStatus("idle");
     setMode("idle");
     setStatusMessage("Pronto para criar uma sala");
+    setIsAudioMuted(false);
+    setTelemetry({
+      width: 0,
+      height: 0,
+      fps: 0,
+      elapsedSecs: 0,
+      hasAudio: false,
+      hasMic: false,
+      bitrateEstimateKbps: 0,
+    });
   };
 
   // Teste local do Host
@@ -333,6 +349,7 @@ export function StreamView() {
     }
 
     setTestStatus("Conectando teste local...");
+    setTestError(null);
     const t0 = performance.now();
 
     try {
@@ -365,6 +382,7 @@ export function StreamView() {
         mediaConn.on("stream", (remoteStream) => {
           setTestStream(remoteStream);
           setTestStatus("Transmissão ao vivo funcionando com sucesso!");
+          setTestError(null);
           setTestLatencyMs(Math.round(performance.now() - t0));
         });
 
@@ -374,14 +392,21 @@ export function StreamView() {
         });
       });
 
-      viewerPeer.on("error", (err) => {
-        setTestStatus(`Erro no teste: ${err.type || err.message}`);
+      viewerPeer.on("error", (err: any) => {
+        let msg = `Erro no teste: ${err?.type || err?.message || "falha de conexão"}`;
+        if (err?.type === "peer-unavailable") {
+          msg = "A sala local ainda não foi inicializada ou o host não está ativo.";
+        }
+        setTestError(msg);
+        setTestStatus(msg);
       });
 
       testPeerRef.current = viewerPeer;
       setShowTestViewer(true);
     } catch (e: any) {
-      setTestStatus(`Falha ao iniciar teste: ${e?.message || String(e)}`);
+      const msg = `Falha ao iniciar teste: ${e?.message || String(e)}`;
+      setTestError(msg);
+      setTestStatus(msg);
     }
   };
 
@@ -391,6 +416,7 @@ export function StreamView() {
       testPeerRef.current = null;
     }
     setTestStream(null);
+    setTestError(null);
     setShowTestViewer(false);
     setTestStatus("Desconectado");
   };
@@ -431,10 +457,9 @@ export function StreamView() {
 
         conn.on("open", () => {
           setSpectatorStatus("connected");
-          setSpectatorStatusMsg("Conectado! Aguardando compartilhamento de tela...");
+          setSpectatorStatusMsg("Conectado! Aguardando o streamer iniciar o compartilhamento...");
           setSpectatorLatencyMs(Math.round(performance.now() - t0));
 
-          // Enviar apelido do espectador ao Host
           const nickname = joinNicknameInput.trim() || "Amigo no RAVIX";
           conn.send({
             type: "SPECTATOR_JOIN",
@@ -454,18 +479,17 @@ export function StreamView() {
 
         conn.on("close", () => {
           setSpectatorStatus("ended");
-          setSpectatorStatusMsg("O streamer encerrou a sessão da sala.");
+          setSpectatorStatusMsg("A sala foi encerrada pelo streamer.");
         });
 
-        conn.on("error", (err) => {
-          console.error("DataConnection error:", err);
+        conn.on("error", () => {
           setSpectatorStatus("error");
-          setSpectatorStatusMsg("Erro de conexão de dados com a sala.");
+          setSpectatorStatusMsg("A sala não foi encontrada ou o host encerrou a transmissão.");
         });
       });
 
       viewerPeer.on("call", (mediaConn) => {
-        setSpectatorStatusMsg("Atendendo chamada de vídeo e som...");
+        setSpectatorStatusMsg("Recebendo vídeo e áudio...");
         mediaConn.answer();
 
         mediaConn.on("stream", (remoteStream) => {
@@ -482,10 +506,16 @@ export function StreamView() {
         });
       });
 
-      viewerPeer.on("error", (err) => {
-        console.error("Viewer error:", err);
+      viewerPeer.on("error", (err: any) => {
+        console.warn("Viewer error:", err);
         setSpectatorStatus("error");
-        setSpectatorStatusMsg(`Não foi possível conectar: ${err.type || err.message}`);
+        if (err?.type === "peer-unavailable") {
+          setSpectatorStatusMsg("A sala não foi encontrada ou o host encerrou a transmissão.");
+        } else if (err?.type === "network" || err?.type === "server-error") {
+          setSpectatorStatusMsg("Falha de conexão com os servidores. Verifique sua conexão com a internet.");
+        } else {
+          setSpectatorStatusMsg(`Não foi possível conectar: ${err?.type || err?.message || "falha de conexão"}`);
+        }
       });
 
       spectatorPeerRef.current = viewerPeer;
@@ -495,20 +525,36 @@ export function StreamView() {
     }
   };
 
+  // Limpeza completa ao sair da sala do espectador: reseta tela e volta ao Idle imediatamente
   const handleLeaveSpectator = () => {
     if (spectatorDataConnRef.current) {
-      spectatorDataConnRef.current.close();
+      try {
+        spectatorDataConnRef.current.close();
+      } catch {}
       spectatorDataConnRef.current = null;
     }
     if (spectatorPeerRef.current) {
-      spectatorPeerRef.current.destroy();
+      try {
+        spectatorPeerRef.current.destroy();
+      } catch {}
       spectatorPeerRef.current = null;
     }
+    if (spectatorStream) {
+      try {
+        spectatorStream.getTracks().forEach((track) => track.stop());
+      } catch {}
+    }
+    if (spectatorVideoRef.current) {
+      spectatorVideoRef.current.srcObject = null;
+    }
+
     setSpectatorStream(null);
     setSpectatorRoomId("");
     setSpectatorStatus("idle");
-    setMode("idle");
     setSpectatorStatusMsg("Desconectado");
+    setSpectatorLatencyMs(null);
+    setSpectatorAudioMuted(false);
+    setMode("idle");
   };
 
   const toggleSpectatorAudio = () => {
@@ -529,12 +575,9 @@ export function StreamView() {
     }
   };
 
-  // Links do Host
+  // Links Oficiais do Host (NUNCA apontam para localhost; sempre para o GitHub Pages oficial)
   const viewerWebUrl = roomId
     ? `https://ivyfated.github.io/ravix-updates/watch.html?room=${encodeURIComponent(roomId)}`
-    : "";
-  const localWebUrl = roomId
-    ? `http://localhost:5173/watch.html?room=${encodeURIComponent(roomId)}`
     : "";
 
   const handleCopyLink = () => {
@@ -549,6 +592,16 @@ export function StreamView() {
     navigator.clipboard.writeText(roomId);
     setCopiedCode(true);
     setTimeout(() => setCopiedCode(false), 2000);
+  };
+
+  // Abrir Web sempre na URL oficial hospedada do GitHub Pages
+  const handleOpenWeb = async () => {
+    if (!viewerWebUrl) return;
+    try {
+      await openUrl(viewerWebUrl);
+    } catch {
+      window.open(viewerWebUrl, "_blank");
+    }
   };
 
   const formatElapsed = (seconds: number) => {
@@ -578,7 +631,7 @@ export function StreamView() {
               )}
               {mode === "spectator" && spectatorStatus === "streaming" && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
-                  RECEBENDO
+                  ASSISTINDO AO VIVO
                 </span>
               )}
             </div>
@@ -624,7 +677,7 @@ export function StreamView() {
             <button
               onClick={handleCloseRoom}
               className="px-3 py-1.5 rounded-xl bg-[#171C26] hover:bg-red-500/20 hover:text-red-300 border border-zinc-800 text-zinc-300 font-semibold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-              title="Encerrar sessão da sala"
+              title="Encerrar sessão da sala e voltar ao início"
             >
               <Square className="h-3 w-3" />
               Fechar Sala
@@ -655,7 +708,6 @@ export function StreamView() {
       {mode === "idle" && (
         <div className="flex-1 flex flex-col items-center justify-center p-4 md:p-8 min-h-[480px]">
           <div className="max-w-4xl w-full grid grid-cols-1 md:grid-cols-2 gap-6 relative">
-            {/* Efeitos decorativos sutis */}
             <div className="absolute -top-16 left-1/4 w-72 h-72 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
             <div className="absolute -bottom-16 right-1/4 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -689,7 +741,7 @@ export function StreamView() {
                   </div>
                   <div className="flex items-center gap-2 text-xs text-zinc-300">
                     <ShieldCheck className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                    <span>Link instantâneo para amigos no navegador ou app</span>
+                    <span>Link oficial para amigos assistirem na web ou no app</span>
                   </div>
                 </div>
               </div>
@@ -796,8 +848,39 @@ export function StreamView() {
               className={`w-full h-full object-contain ${!spectatorStream ? "hidden" : ""}`}
             />
 
-            {/* Overlay quando ainda não recebeu vídeo */}
-            {!spectatorStream && (
+            {/* Tratamento elegante de Erro / peer-unavailable (Elimina a tela preta e loading eterno) */}
+            {(spectatorStatus === "error" || spectatorStatus === "ended") && (
+              <div className="flex flex-col items-center justify-center p-8 text-center max-w-md bg-[#090B0E]/95 rounded-2xl border border-red-500/20 shadow-2xl">
+                <div className="p-3.5 rounded-2xl bg-red-500/10 text-red-400 border border-red-500/20 mb-3">
+                  <AlertCircle className="h-8 w-8" />
+                </div>
+                <h3 className="text-base font-bold text-white mb-1.5">
+                  Transmissão Indisponível
+                </h3>
+                <p className="text-xs text-zinc-400 mb-6 leading-relaxed">
+                  {spectatorStatusMsg}
+                </p>
+                <div className="flex items-center gap-3 w-full sm:w-auto">
+                  <button
+                    onClick={handleJoinAsSpectator}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-950/40"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Tentar Novamente
+                  </button>
+                  <button
+                    onClick={handleLeaveSpectator}
+                    className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-[#171C26] hover:bg-[#202735] text-zinc-300 font-semibold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-zinc-800"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Voltar ao Início
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Overlay quando ainda está conectando */}
+            {!spectatorStream && spectatorStatus !== "error" && spectatorStatus !== "ended" && (
               <div className="flex flex-col items-center justify-center p-8 text-center max-w-md">
                 <div className="inline-block animate-spin h-8 w-8 border-3 border-emerald-500 border-t-transparent rounded-full mb-4" />
                 <h3 className="text-base font-bold text-white mb-1">
@@ -958,7 +1041,7 @@ export function StreamView() {
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                       Status: <b className="text-zinc-200">{testStatus}</b>
                     </span>
-                    {testLatencyMs !== null && (
+                    {testLatencyMs !== null && !testError && (
                       <span className="font-mono text-emerald-400 text-[11px]">
                         Latência: {testLatencyMs}ms
                       </span>
@@ -971,9 +1054,33 @@ export function StreamView() {
                       autoPlay
                       playsInline
                       controls
-                      className={`w-full h-full object-contain ${!testStream ? "hidden" : ""}`}
+                      className={`w-full h-full object-contain ${!testStream || testError ? "hidden" : ""}`}
                     />
-                    {!testStream && (
+
+                    {/* Exibição de erro claro no teste (sem tela preta infinita) */}
+                    {testError && (
+                      <div className="text-center p-4 max-w-sm">
+                        <AlertCircle className="h-6 w-6 text-amber-400 mx-auto mb-2" />
+                        <p className="text-xs text-zinc-300 mb-3">{testError}</p>
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={handleStartTestViewer}
+                            className="px-3 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <RefreshCw className="h-3 w-3" />
+                            Tentar Novamente
+                          </button>
+                          <button
+                            onClick={handleStopTestViewer}
+                            className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] cursor-pointer"
+                          >
+                            Fechar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {!testStream && !testError && (
                       <div className="text-center p-4">
                         <div className="inline-block animate-spin h-6 w-6 border-2 border-purple-500 border-t-transparent rounded-full mb-2" />
                         <p className="text-xs text-zinc-400">Aguardando início do vídeo...</p>
@@ -1055,15 +1162,16 @@ export function StreamView() {
                     <span>Compartilhar</span>
                   </button>
 
-                  <a
-                    href={localWebUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                  {/* Botão Abrir Web que abre OBRIGATORIAMENTE a URL oficial do GitHub Pages no navegador padrão */}
+                  <button
+                    type="button"
+                    onClick={handleOpenWeb}
                     className="py-1.5 px-3 rounded-lg bg-[#121620] hover:bg-[#1A1F2C] border border-zinc-800 text-[11px] font-medium text-zinc-300 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    title="Abrir no Navegador Web Oficial"
                   >
                     <ExternalLink className="h-3.5 w-3.5 text-purple-400" />
                     <span>Abrir Web</span>
-                  </a>
+                  </button>
                 </div>
               </div>
             </div>

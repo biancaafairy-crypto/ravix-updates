@@ -655,6 +655,9 @@
         <p id="overlayDesc" style="color: #9CA3AF; font-size: 13px; max-width: 400px; line-height: 1.5;">
           Aguardando conexão com o streamer...
         </p>
+        <button id="overlayErrorBtn" type="button" onclick="leaveSession()" style="display: none; margin-top: 14px; background: #1F2937; color: #FFF; border: 1px solid #374151; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer;">
+          ← Voltar ao Início
+        </button>
       </div>
     </div>
 
@@ -758,6 +761,8 @@
 
       playerOverlay.style.display = "flex";
       playerSpinner.style.display = "block";
+      const errorBtn = document.getElementById("overlayErrorBtn");
+      if (errorBtn) errorBtn.style.display = "none";
       overlayTitle.innerText = "Conectando à Sala";
       overlayDesc.innerText = `Localizando a transmissão em ${room}...`;
       playerStatusText.innerText = "Conectando...";
@@ -856,8 +861,15 @@
       peer.on("error", (err) => {
         console.error("Erro no PeerJS:", err);
         playerSpinner.style.display = "none";
-        overlayTitle.innerText = "Falha na Conexão";
-        overlayDesc.innerText = `Não foi possível conectar à sala: ${err.type || err.message}`;
+        const errorBtn = document.getElementById("overlayErrorBtn");
+        if (errorBtn) errorBtn.style.display = "inline-block";
+        if (err.type === "peer-unavailable") {
+          overlayTitle.innerText = "Sala Não Encontrada";
+          overlayDesc.innerText = "A sala não foi encontrada ou o host encerrou a transmissão. Verifique o código e tente novamente.";
+        } else {
+          overlayTitle.innerText = "Falha na Conexão";
+          overlayDesc.innerText = `Não foi possível conectar à sala: ${err.type || err.message}`;
+        }
         playerStatusText.innerText = "Erro de conexão";
       });
     }
